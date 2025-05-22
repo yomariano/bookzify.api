@@ -1,0 +1,24 @@
+{
+  "name": "bookhub-api-service",
+  "version": "1.0.0",
+  "description": "API service for BookHub book search functionality",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [
+    "api",
+    "books",
+    "search"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "playwright": "^1.52.0"
+  }
+}
