@@ -203,8 +203,8 @@ const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
     ? [
         // Add your production domain here
-        'https://yourdomain.com',
-        'https://www.yourdomain.com'
+        'https://bookzify.xyz',
+        'https://www.bookzify.xyz'
       ]
     : [
         // Development origins
