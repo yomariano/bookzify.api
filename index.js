@@ -281,7 +281,8 @@ try {
         console.log('🧪 Testing production Supabase connectivity...');
         const { data, error } = await supabase
           .from('books')
-          .select('*', { count: 'exact' })           .limit(1)
+          .select('*', { count: 'exact' })           
+          .limit(1)
           .single();
         
         if (error && error.code !== 'PGRST116') {
@@ -298,9 +299,8 @@ try {
           console.log('🧪 Testing simplified fallback client...');
           const { data: testData, error: testError } = await fallbackClient
             .from('books')
-            .select('count')
-            .limit(1)
-            .single();
+            .select('id', { count: 'exact', head: true })
+            .limit(1);
           
           if (!testError || testError.code === 'PGRST116') {
             console.log('✅ Simplified fallback client works! Replacing global client...');
@@ -402,9 +402,8 @@ setTimeout(async () => {
     console.log(`💾 Testing database query...`);
     const { data, error } = await supabase
       .from('books')
-      .select('count')
-      .limit(1)
-      .single();
+      .select('id', { count: 'exact', head: true })
+      .limit(1);
     
     if (error && error.code !== 'PGRST116') {
       console.error('❌ Database query failed:', error);
@@ -577,7 +576,7 @@ async function checkBookExists(downloadUrl) {
       .from('books')
       .select('id, title, author, download_url, s3_bucket_url')
       .eq('download_url', downloadUrl)
-      .single();
+      .maybeSingle();
 
     if (error && error.code !== 'PGRST116') { // PGRST116 is "not found" error
       console.error('❌ Database query error:', {
@@ -1906,7 +1905,7 @@ app.post('/books/download', async (req, res) => {
 
       // Launch browser with headless=false like Python (change to true for production)
       browser = await chromium.launch({
-        headless: false, // Changed from true to match Python
+        headless: true, // Changed from true to match Python
         args: ['--no-sandbox', '--disable-setuid-sandbox']
       });
 
