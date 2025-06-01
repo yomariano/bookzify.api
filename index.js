@@ -110,7 +110,7 @@ if (process.env.NODE_ENV === 'production') {
 
 const supabaseKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE_ANON_KEY;
 
-// Debug: Compare with frontend key
+// Debug: Compare with frontend key.
 const frontendKey = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc0NzUxODI0MCwiZXhwIjo0OTAzMTkxODQwLCJyb2xlIjoic2VydmljZV9yb2xlIn0.-Q1GLX4t6XshgYFIeYfCx5bgNsYVAhu-2CP5VC_RpjM";
 
 console.log('🔑 API Key Comparison:');
@@ -281,8 +281,7 @@ try {
         console.log('🧪 Testing production Supabase connectivity...');
         const { data, error } = await supabase
           .from('books')
-          .select('count')
-          .limit(1)
+          .select('*', { count: 'exact' })           .limit(1)
           .single();
         
         if (error && error.code !== 'PGRST116') {
