@@ -13,6 +13,13 @@ services:
       - supabase
     ports:
       - "5005:5005"
+    labels:
+      # Required for Caddy Docker Proxy discovery
+      - "caddy=api.bookzify.xyz"
+      - "caddy.reverse_proxy={{upstreams 5005}}"
+      - "caddy.tls.dns=cloudflare"
+      # Coolify management labels
+      - "coolify.managed=true"
 
 networks:
   coolify:
