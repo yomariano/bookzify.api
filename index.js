@@ -266,8 +266,8 @@ try {
           console.log('🔄 Supabase client replaced with PostgreSQL direct connection.');
           console.log('⚠️ Note: Storage operations disabled due to network isolation, but database queries will function.');
           
-          // Skip the network test since we're using direct PostgreSQL
-          return;
+          // Skip the network test since we're using direct PostgreSQL - use flag instead of return
+          console.log('✅ PostgreSQL mode active - skipping network-based tests');
         }
       } catch (pgError) {
         console.error('❌ Direct PostgreSQL connection failed:', pgError);
