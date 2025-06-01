@@ -8,16 +8,23 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=5005
+      # Add CORS-related environment variables
+      - CORS_ALLOWED_ORIGINS=https://bookzify.xyz,https://www.bookzify.xyz,https://api.bookzify.xyz
     networks:
       - coolify
       - supabase
     ports:
       - "5005:5005"
     labels:
-      # Required for Caddy Docker Proxy discovery
+      # Caddy Docker Proxy labels for subdomain
       - "caddy=api.bookzify.xyz"
       - "caddy.reverse_proxy={{upstreams 5005}}"
       - "caddy.tls.dns=cloudflare"
+      # Additional Caddy headers for CORS
+      - "caddy.header.add=Access-Control-Allow-Origin \"https://bookzify.xyz, https://www.bookzify.xyz, https://api.bookzify.xyz\""
+      - "caddy.header.add=Access-Control-Allow-Methods \"GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH\""
+      - "caddy.header.add=Access-Control-Allow-Headers \"Content-Type, Authorization, X-Requested-With, Accept, Origin, Access-Control-Allow-Origin, Access-Control-Allow-Methods, Access-Control-Allow-Headers\""
+      - "caddy.header.add=Access-Control-Allow-Credentials \"true\""
       # Coolify management labels
       - "coolify.managed=true"
 

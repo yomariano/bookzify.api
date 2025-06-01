@@ -654,11 +654,10 @@ const PORT = process.env.PORT || 5005;
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
     ? [
-        // Production domains - serving API from main domain
+        // Production domains - allow both main domain and API subdomain
         'https://bookzify.xyz',
         'https://www.bookzify.xyz',
-        // Remove api.bookzify.xyz since we're serving from main domain path
-        // 'https://api.bookzify.xyz'  // Commented out - subdomain not working
+        'https://api.bookzify.xyz'
       ]
     : [
         // Development origins
@@ -676,16 +675,22 @@ const corsOptions = {
       ],
   credentials: true,            // Allow cookies and auth headers
   optionsSuccessStatus: 200,    // For legacy browser support
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH'],
   allowedHeaders: [
     'Content-Type', 
     'Authorization', 
     'X-Requested-With',
     'Accept',
     'Origin',
-    'Access-Control-Allow-Origin'
+    'Access-Control-Allow-Origin',
+    'Access-Control-Allow-Methods',
+    'Access-Control-Allow-Headers'
   ],
-  exposedHeaders: ['Access-Control-Allow-Origin']
+  exposedHeaders: [
+    'Access-Control-Allow-Origin',
+    'Access-Control-Allow-Methods',
+    'Access-Control-Allow-Headers'
+  ]
 };
 
 app.use(cors(corsOptions));
@@ -2621,4 +2626,35 @@ app.get('/admin/debug/env', (req, res) => {
   };
   
   res.json(debugInfo);
+});
+
+// CORS test endpoint
+app.options('/cors-test', cors(corsOptions)); // Enable pre-flight for the test endpoint
+app.get('/cors-test', cors(corsOptions), (req, res) => {
+  const origin = req.get('Origin');
+  const host = req.get('Host');
+  
+  res.json({
+    success: true,
+    cors: {
+      origin: origin || 'not set',
+      host: host || 'not set',
+      allowed_origins: corsOptions.origin,
+      allowed_methods: corsOptions.methods,
+      allowed_headers: corsOptions.allowedHeaders,
+      exposed_headers: corsOptions.exposedHeaders,
+      credentials: corsOptions.credentials
+    },
+    headers: {
+      sent: {
+        'Access-Control-Allow-Origin': res.get('Access-Control-Allow-Origin'),
+        'Access-Control-Allow-Methods': res.get('Access-Control-Allow-Methods'),
+        'Access-Control-Allow-Headers': res.get('Access-Control-Allow-Headers'),
+        'Access-Control-Allow-Credentials': res.get('Access-Control-Allow-Credentials')
+      },
+      received: req.headers
+    },
+    environment: process.env.NODE_ENV,
+    timestamp: new Date().toISOString()
+  });
 });
