@@ -781,7 +781,7 @@ app.get('/books/search', async (req, res) => {
       // Launch browser with specific options
       console.log('🌐 Launching browser...');
       browser = await chromium.launch({
-        headless: false, // Changed from false to true for production
+        headless: process.env.PLAYWRIGHT_HEADLESS !== 'false', // Set PLAYWRIGHT_HEADLESS=false for debugging
         args: ['--no-sandbox', '--disable-setuid-sandbox']
       });
       
@@ -1224,7 +1224,7 @@ app.post('/books/download', async (req, res) => {
 
       // Launch browser with headless=false like Python (change to true for production)
       browser = await chromium.launch({
-        headless: false, // Changed from false to true for production
+        headless: process.env.PLAYWRIGHT_HEADLESS !== 'false', // Set PLAYWRIGHT_HEADLESS=false for debugging
         args: ['--no-sandbox', '--disable-setuid-sandbox']
       });
 
