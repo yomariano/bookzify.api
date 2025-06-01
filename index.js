@@ -38,11 +38,6 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
-console.log('🔧 Supabase Configuration:');
-console.log(`   URL: ${supabaseUrl}`);
-console.log(`   Key: ${supabaseKey ? '***' + supabaseKey.slice(-4) : 'Not found'}`);
-console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
-
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Support multiple book sources
@@ -182,15 +177,50 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
 // Helper function to check if book already exists
 async function checkBookExists(downloadUrl) {
   try {
+    console.log(`🔍 Checking database for book with download_url: ${downloadUrl}`);
+    
     const { data, error } = await supabase
       .from('books')
-      .select('id, s3_bucket_url')
+      .select('id, title, author, download_url, s3_bucket_url')
       .eq('download_url', downloadUrl)
       .single();
 
     if (error && error.code !== 'PGRST116') { // PGRST116 is "not found" error
       console.error('❌ Error checking book existence:', error);
       throw error;
+    }
+
+    if (data) {
+      console.log(`✅ Found existing book in database:`, {
+        id: data.id,
+        title: data.title,
+        author: data.author,
+        download_url: data.download_url,
+        s3_bucket_url: data.s3_bucket_url
+      });
+      
+      // Validate that the URLs make sense together
+      if (data.download_url !== downloadUrl) {
+        console.warn(`⚠️ URL mismatch detected! Requested: ${downloadUrl}, Found: ${data.download_url}`);
+      }
+      
+      // Check if s3_bucket_url seems to match the expected content
+      const downloadUrlLower = downloadUrl.toLowerCase();
+      const s3UrlLower = data.s3_bucket_url.toLowerCase();
+      
+      // Extract filename from download URL for basic validation
+      const downloadUrlParts = downloadUrl.split('/');
+      const downloadFilename = downloadUrlParts[downloadUrlParts.length - 1] || '';
+      
+      if (downloadFilename && !s3UrlLower.includes(downloadFilename.toLowerCase().split('.')[0])) {
+        console.warn(`⚠️ Potential data corruption detected!`);
+        console.warn(`   Download URL: ${downloadUrl}`);
+        console.warn(`   S3 URL: ${data.s3_bucket_url}`);
+        console.warn(`   Expected filename: ${downloadFilename}`);
+        console.warn(`   This might indicate corrupted database data.`);
+      }
+    } else {
+      console.log(`📭 No existing book found for URL: ${downloadUrl}`);
     }
 
     return data; // Returns null if not found, or book data if found
@@ -355,64 +385,8 @@ app.get('/health', (req, res) => {
       openrouter: !!process.env.VITE_OPENROUTER_API_KEY,
       huggingface: !!process.env.VITE_HUGGINGFACE_API_KEY,
       supabase: !!process.env.SUPABASE_URL
-    },
-    supabase: {
-      url: process.env.SUPABASE_URL || 'Not configured',
-      hasAnonKey: !!process.env.SERVICE_SUPABASEANON_KEY,
-      hasServiceKey: !!process.env.SERVICE_SUPABASESERVICE_KEY,
-      environment: process.env.NODE_ENV || 'development'
     }
   });
-});
-
-// Test endpoint for Supabase URL construction
-app.get('/test-supabase-url', (req, res) => {
-  try {
-    const testUrl = req.query.url || 'https://supabasekong-g00sk4cwgwk0cwkc8kcgc8gk.bookzify.xyz/storage/v1/object/public/books/test-file.pdf';
-    
-    // Parse the URL like handleSupabaseUrl does
-    const urlObj = new URL(testUrl);
-    const pathParts = urlObj.pathname.split('/');
-    const bucketIndex = pathParts.findIndex(part => part === 'public' || part === 'sign');
-    
-    if (bucketIndex === -1 || bucketIndex + 2 >= pathParts.length) {
-      return res.status(400).json({ error: 'Invalid Supabase storage URL format' });
-    }
-    
-    const bucketName = pathParts[bucketIndex + 1];
-    const filePath = pathParts.slice(bucketIndex + 2).join('/');
-    
-    // Construct the storage API URL using environment variable
-    const supabaseBaseUrl = process.env.SUPABASE_URL;
-    const storageApiUrl = `${supabaseBaseUrl}/storage/v1/object/${bucketName}/${filePath}`;
-    
-    res.json({
-      originalUrl: testUrl,
-      parsedUrl: {
-        protocol: urlObj.protocol,
-        host: urlObj.host,
-        pathname: urlObj.pathname,
-        pathParts,
-        bucketIndex,
-        bucketName,
-        filePath
-      },
-      supabaseConfig: {
-        baseUrl: supabaseBaseUrl,
-        constructedStorageUrl: storageApiUrl
-      },
-      comparison: {
-        originalHost: urlObj.host,
-        configuredHost: supabaseBaseUrl ? new URL(supabaseBaseUrl).host : 'N/A',
-        portMismatch: urlObj.host !== (supabaseBaseUrl ? new URL(supabaseBaseUrl).host : '')
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Failed to test URL construction',
-      message: error.message
-    });
-  }
 });
 
 // Book content proxy endpoint
@@ -548,18 +522,10 @@ async function handleSupabaseUrl(url) {
       filePath
     });
     
-    // Method 1: Use direct storage API endpoint with proper base URL
+    // Method 1: Use direct storage API endpoint (this is what works)
     try {
-      // Use the SUPABASE_URL environment variable to get the correct base URL
-      // This ensures we use the right port (8000 in production, 443 in other environments)
-      const supabaseBaseUrl = process.env.SUPABASE_URL;
-      if (!supabaseBaseUrl) {
-        throw new Error('SUPABASE_URL environment variable not found');
-      }
-      
-      const storageApiUrl = `${supabaseBaseUrl}/storage/v1/object/${bucketName}/${filePath}`;
+      const storageApiUrl = `${urlObj.protocol}//${urlObj.host}/storage/v1/object/${bucketName}/${filePath}`;
       console.log(`[BookProxy] Method 1: Using direct storage API: ${storageApiUrl}`);
-      console.log(`[BookProxy] Base URL from env: ${supabaseBaseUrl}`);
       
       const serviceKey = process.env.SERVICE_SUPABASESERVICE_KEY;
       const anonKey = process.env.SERVICE_SUPABASEANON_KEY;
@@ -572,36 +538,24 @@ async function handleSupabaseUrl(url) {
       const authKey = serviceKey || anonKey;
       console.log(`[BookProxy] Using ${serviceKey ? 'service' : 'anon'} key for authentication`);
       
-      // Add timeout to prevent hanging requests in production
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-      
-      try {
-        const response = await fetch(storageApiUrl, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${authKey}`,
-            'apikey': authKey,
-            'Accept': '*/*',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
-          },
-          signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-        
-        if (response.ok) {
-          console.log(`[BookProxy] ✅ Method 1 successful with direct storage API`);
-          return response;
-        } else {
-          const errorText = await response.text();
-          console.log(`[BookProxy] Method 1 failed: ${response.status}`);
-          console.log(`[BookProxy] Error details:`, errorText);
-          throw new Error(`Direct storage API call failed: ${response.status}`);
+      const response = await fetch(storageApiUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${authKey}`,
+          'apikey': authKey,
+          'Accept': '*/*',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
         }
-      } catch (fetchError) {
-        clearTimeout(timeoutId);
-        throw fetchError;
+      });
+      
+      if (response.ok) {
+        console.log(`[BookProxy] ✅ Method 1 successful with direct storage API`);
+        return response;
+      } else {
+        const errorText = await response.text();
+        console.log(`[BookProxy] Method 1 failed: ${response.status}`);
+        console.log(`[BookProxy] Error details:`, errorText);
+        throw new Error(`Direct storage API call failed: ${response.status}`);
       }
     } catch (directApiError) {
       console.log(`[BookProxy] Method 1 failed: ${directApiError.message}`);
@@ -690,12 +644,15 @@ app.get('/', (req, res) => {
     endpoints: {
       // Book-related endpoints
       'GET /health': 'Health check with service status',
-      'GET /test-supabase-url?url=<supabase_url>': 'Test Supabase URL construction and configuration',
       'GET /books/search?query=<term>&page=<num>&limit=<num>&source=<source>': 'Search books from multiple sources',
       'POST /books/download': 'Download a book (requires url, title, author, format, category in body)',
       'POST /api/proxy/book-content': 'Proxy book content to resolve CORS issues (requires url and optional format in body)',
       'GET /books/:id': 'Get book details (not implemented)',
       'GET /test-download': 'Test download functionality',
+      
+      // Admin endpoints
+      'GET /admin/database/diagnostics': 'Run database diagnostics to identify corrupted records',
+      'DELETE /admin/database/cleanup/:bookId?confirm=true': 'Delete a corrupted book record and its S3 file',
       
       // AI API proxies
       'POST /api/openrouter/chat': 'OpenRouter Chat API proxy',
@@ -709,8 +666,9 @@ app.get('/', (req, res) => {
       'Search ebook-hunter': '/books/search?query=javascript&source=ebook-hunter',
       'Search Anna\'s Archive': '/books/search?query=javascript&source=annas-archive',
       'Search default (ebook-hunter)': '/books/search?query=javascript',
-      'Test Supabase URL': '/test-supabase-url?url=https://your-supabase-url/storage/v1/object/public/books/file.pdf',
       'Proxy book content': 'POST /api/proxy/book-content with { "url": "https://example.com/book.pdf", "format": "pdf" }',
+      'Database diagnostics': 'GET /admin/database/diagnostics',
+      'Delete corrupted book': 'DELETE /admin/database/cleanup/book-id-here?confirm=true',
       'OpenRouter Chat': 'POST /api/openrouter/chat with standard OpenRouter chat completion payload',
       'Hugging Face': 'POST /api/huggingface/inference with model name and inference payload'
     },
@@ -1507,6 +1465,173 @@ app.post('/books/download', async (req, res) => {
       success: false,
       error: 'Fatal error',
       message: error.message || 'An unexpected error occurred'
+    });
+  }
+});
+
+// Database cleanup and diagnostic endpoint
+app.get('/admin/database/diagnostics', async (req, res) => {
+  try {
+    console.log('🔍 Running database diagnostics...');
+    
+    // Get all books to check for potential issues
+    const { data: books, error } = await supabase
+      .from('books')
+      .select('id, title, author, download_url, s3_bucket_url')
+      .order('created_at', { ascending: false })
+      .limit(100); // Limit to recent 100 books
+
+    if (error) {
+      console.error('❌ Error fetching books for diagnostics:', error);
+      return res.status(500).json({ error: 'Failed to fetch books', details: error.message });
+    }
+
+    const issues = [];
+    const stats = {
+      total: books.length,
+      withIssues: 0,
+      urlMismatches: 0,
+      potentialCorruption: 0
+    };
+
+    books.forEach(book => {
+      const bookIssues = [];
+      
+      // Check for URL mismatches or corruption
+      if (book.download_url && book.s3_bucket_url) {
+        const downloadUrlParts = book.download_url.split('/');
+        const downloadFilename = downloadUrlParts[downloadUrlParts.length - 1] || '';
+        
+        if (downloadFilename) {
+          const baseFilename = downloadFilename.toLowerCase().split('.')[0];
+          const s3UrlLower = book.s3_bucket_url.toLowerCase();
+          
+          // Check if the S3 URL contains something related to the download filename
+          if (baseFilename.length > 3 && !s3UrlLower.includes(baseFilename)) {
+            bookIssues.push('Filename mismatch between download_url and s3_bucket_url');
+            stats.potentialCorruption++;
+          }
+        }
+        
+        // Check for obvious domain mismatches
+        if (book.download_url.includes('tiny-files.com') && 
+            book.s3_bucket_url.includes('supabase') && 
+            !book.s3_bucket_url.toLowerCase().includes(book.title?.toLowerCase().split(' ')[0] || '')) {
+          bookIssues.push('Domain and content mismatch detected');
+          stats.urlMismatches++;
+        }
+      }
+      
+      if (bookIssues.length > 0) {
+        issues.push({
+          id: book.id,
+          title: book.title,
+          author: book.author,
+          download_url: book.download_url,
+          s3_bucket_url: book.s3_bucket_url,
+          issues: bookIssues
+        });
+        stats.withIssues++;
+      }
+    });
+
+    console.log(`📊 Database diagnostics completed. Found ${issues.length} potential issues.`);
+
+    res.json({
+      success: true,
+      stats,
+      issues: issues.slice(0, 20), // Return first 20 issues
+      message: `Diagnostics completed. Found ${issues.length} books with potential issues out of ${books.length} checked.`
+    });
+
+  } catch (error) {
+    console.error('❌ Error running database diagnostics:', error);
+    res.status(500).json({ 
+      error: 'Failed to run diagnostics', 
+      details: error.message 
+    });
+  }
+});
+
+// Database cleanup endpoint to remove corrupted records
+app.delete('/admin/database/cleanup/:bookId', async (req, res) => {
+  try {
+    const { bookId } = req.params;
+    const { confirm } = req.query;
+    
+    if (confirm !== 'true') {
+      return res.status(400).json({
+        error: 'Confirmation required',
+        message: 'Add ?confirm=true to the URL to confirm deletion'
+      });
+    }
+
+    console.log(`🗑️ Attempting to delete book with ID: ${bookId}`);
+    
+    // First, get the book details to log what we're deleting
+    const { data: book, error: fetchError } = await supabase
+      .from('books')
+      .select('*')
+      .eq('id', bookId)
+      .single();
+
+    if (fetchError) {
+      console.error('❌ Error fetching book for deletion:', fetchError);
+      return res.status(404).json({ error: 'Book not found', details: fetchError.message });
+    }
+
+    console.log('📋 Book to be deleted:', {
+      id: book.id,
+      title: book.title,
+      download_url: book.download_url,
+      s3_bucket_url: book.s3_bucket_url
+    });
+
+    // Delete the book record
+    const { error: deleteError } = await supabase
+      .from('books')
+      .delete()
+      .eq('id', bookId);
+
+    if (deleteError) {
+      console.error('❌ Error deleting book:', deleteError);
+      return res.status(500).json({ error: 'Failed to delete book', details: deleteError.message });
+    }
+
+    // Optionally, try to clean up the S3 file if it exists
+    if (book.s3_bucket_id) {
+      try {
+        const { error: storageError } = await supabase.storage
+          .from('books')
+          .remove([book.s3_bucket_id]);
+        
+        if (storageError) {
+          console.warn('⚠️ Failed to delete S3 file:', storageError);
+        } else {
+          console.log('🧹 Successfully deleted S3 file:', book.s3_bucket_id);
+        }
+      } catch (storageCleanupError) {
+        console.warn('⚠️ Error during S3 cleanup:', storageCleanupError);
+      }
+    }
+
+    console.log(`✅ Successfully deleted book: ${bookId}`);
+    
+    res.json({
+      success: true,
+      message: 'Book deleted successfully',
+      deletedBook: {
+        id: book.id,
+        title: book.title,
+        download_url: book.download_url
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error in cleanup endpoint:', error);
+    res.status(500).json({ 
+      error: 'Failed to delete book', 
+      details: error.message 
     });
   }
 });
