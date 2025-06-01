@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# Exit on error
+set -e
+
+# Supabase network name
+SUPABASE_NETWORK="g00sk4cwgwk0cwkc8kcgc8gk"
+
+# Find the API container
+API_CONTAINER=$(docker ps --format '{{.Names}}' | grep 'u8s8oswsw84cscwggwgkokk8' | head -n 1)
+
+if [ -z "$API_CONTAINER" ]; then
+    echo "❌ API container not found"
+    exit 1
+fi
+
+echo "📦 Found API container: $API_CONTAINER"
+
+# Check if container is already connected to the network
+if docker network inspect $SUPABASE_NETWORK | grep -q "$API_CONTAINER"; then
+    echo "✅ Container already connected to Supabase network"
+else
+    echo "🔄 Connecting container to Supabase network..."
+    docker network connect $SUPABASE_NETWORK $API_CONTAINER
+    echo "✅ Container connected to Supabase network"
+fi
+
+# Update environment variables in Coolify
+coolify set env POSTGRES_HOST=supabase-db
+coolify set env SUPABASE_URL=http://supabase-kong:8000
+
+# Restart the container to apply changes
+echo "🔄 Restarting container..."
+docker restart $API_CONTAINER
+
+echo "✅ Network setup complete!" 

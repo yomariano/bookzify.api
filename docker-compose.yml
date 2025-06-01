@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=production
+      - PORT=5005
+    networks:
+      - coolify
+      - supabase
+    ports:
+      - "5005:5005"
+
+networks:
+  coolify:
+    external: true
+  supabase:
+    external:
+      name: g00sk4cwgwk0cwkc8kcgc8gk 

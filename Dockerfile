@@ -1,8 +1,10 @@
 # Use Node.js 20 as the base image
 FROM node:20-slim
 
-# Install dependencies required for Playwright
+# Install required dependencies for Playwright
 RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
     libglib2.0-0 \
     libnss3 \
     libnspr4 \
@@ -25,24 +27,34 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create and set working directory
+# Create app directory
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN npm install
 
-# Install Playwright browsers
-RUN npx playwright install chromium
-
-# Copy the rest of the application
+# Copy source code
 COPY . .
 
-# Expose the port your app runs on
-ENV PORT=5005
-EXPOSE 5005
+# Install Playwright browser
+RUN npx playwright install --with-deps chromium
 
-# Start the application
-CMD ["npm", "start"] 
+# Create a custom entrypoint script
+RUN echo '#!/bin/bash\n\
+# Wait for network services to be ready\n\
+echo "Waiting for Supabase services..."\n\
+timeout 30 bash -c "until ping -c 1 supabase-kong > /dev/null 2>&1; do sleep 2; done"\n\
+timeout 30 bash -c "until ping -c 1 supabase-db > /dev/null 2>&1; do sleep 2; done"\n\
+\n\
+# Start the application\n\
+exec node index.js' > /app/docker-entrypoint.sh \
+    && chmod +x /app/docker-entrypoint.sh
+
+# Set the entrypoint
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+# Expose port
+EXPOSE 5005 
