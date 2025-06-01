@@ -354,207 +354,126 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Diagnostic endpoint for troubleshooting production issues
-app.get('/diagnostic', async (req, res) => {
-  const testUrl = req.query.url || 'https://supabasekong-g00sk4cwgwk0cwkc8kcgc8gk.bookzify.xyz/storage/v1/object/public/books/test.txt';
-  
-  console.log('[Diagnostic] Starting connectivity test...');
-  
-  const diagnostics = {
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    testUrl,
-    results: {
-      dnsResolution: null,
-      basicConnectivity: null,
-      supabaseAuth: null,
-      alternativeUrls: []
-    },
-    recommendations: []
-  };
-
+// Book content proxy endpoint
+app.post('/api/proxy/book-content', async (req, res) => {
   try {
-    // Test 1: DNS Resolution
-    console.log('[Diagnostic] Testing DNS resolution...');
-    try {
-      const url = new URL(testUrl);
-      const hostname = url.hostname;
-      
-      // Try to resolve the hostname
-      const dns = await import('dns/promises');
-      const addresses = await dns.lookup(hostname);
-      diagnostics.results.dnsResolution = {
-        status: 'success',
-        hostname,
-        addresses: Array.isArray(addresses) ? addresses : [addresses],
-        message: 'DNS resolution successful'
-      };
-      console.log('[Diagnostic] ✅ DNS resolution successful');
-    } catch (dnsError) {
-      diagnostics.results.dnsResolution = {
-        status: 'error',
-        error: dnsError.message,
-        message: 'DNS resolution failed'
-      };
-      diagnostics.recommendations.push('DNS resolution failed. Check network connectivity and DNS settings.');
-      console.log('[Diagnostic] ❌ DNS resolution failed:', dnsError.message);
+    const { url, format } = req.body;
+    const startTime = Date.now();
+    
+    if (!url) {
+      return res.status(400).json({ 
+        error: 'Missing required field: url' 
+      });
     }
 
-    // Test 2: Basic connectivity with different timeout values
-    console.log('[Diagnostic] Testing basic connectivity...');
-    const timeouts = [5000, 15000, 30000]; // 5s, 15s, 30s
+    console.log(`[BookProxy] 📥 Fetching ${format || 'unknown'} content from:`, url);
+    console.log(`[BookProxy] Using service key:`, process.env.SERVICE_SUPABASESERVICE_KEY ? 'Yes' : 'No');
+    console.log(`[BookProxy] Using anon key:`, process.env.SERVICE_SUPABASEANON_KEY ? 'Yes' : 'No');
+
+    // Handle different URL types
+    let response;
     
-    for (const timeout of timeouts) {
-      try {
-        console.log(`[Diagnostic] Trying ${timeout}ms timeout...`);
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeout);
-        
-        const response = await fetch(testUrl, {
-          method: 'HEAD',
-          signal: controller.signal,
-          headers: {
-            'User-Agent': 'Bookzify-Diagnostic/1.0'
-          }
-        });
-        
-        clearTimeout(timeoutId);
-        
-        diagnostics.results.basicConnectivity = {
-          status: 'success',
-          statusCode: response.status,
-          timeout: timeout,
-          headers: Object.fromEntries(response.headers.entries()),
-          message: `Connection successful with ${timeout}ms timeout`
-        };
-        console.log('[Diagnostic] ✅ Basic connectivity successful');
-        break;
-      } catch (connectError) {
-        console.log(`[Diagnostic] ❌ Failed with ${timeout}ms timeout:`, connectError.message);
-        if (timeout === timeouts[timeouts.length - 1]) {
-          // Last attempt failed
-          diagnostics.results.basicConnectivity = {
-            status: 'error',
-            error: connectError.message,
-            timeoutsTested: timeouts,
-            message: 'All connectivity tests failed'
-          };
-          diagnostics.recommendations.push('Basic connectivity failed. Check firewall settings and network access.');
+    if (url.includes('supabase')) {
+      response = await handleSupabaseUrl(url);
+    } else if (url.includes('s3.amazonaws.com') || url.includes('amazonaws.com')) {
+      response = await handleS3Url(url);
+    } else {
+      response = await handleExternalUrl(url);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[BookProxy] ❌ Error fetching content: ${response.status} ${response.statusText}`);
+      console.error(`[BookProxy] Error details:`, errorText);
+      return res.status(response.status).json({
+        error: `Failed to fetch book content: ${response.status} ${response.statusText}`,
+        details: errorText
+      });
+    }
+
+    // Get content type from response headers
+    const contentType = response.headers.get('content-type') || 'unknown';
+    console.log(`[BookProxy] 📄 Content-Type from source:`, contentType);
+
+    // Determine response type based on format
+    const isTextFormat = format && ['txt', 'html'].includes(format.toLowerCase());
+    
+    let contentSize = 0;
+    let responseData;
+
+    if (isTextFormat) {
+      responseData = await response.text();
+      contentSize = Buffer.from(responseData).length;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.send(responseData);
+    } else {
+      // Binary format (PDF, EPUB, etc.)
+      const arrayBuffer = await response.arrayBuffer();
+      responseData = Buffer.from(arrayBuffer);
+      contentSize = responseData.length;
+      
+      // Set appropriate content type based on format
+      let responseContentType = 'application/octet-stream';
+      if (format) {
+        switch (format.toLowerCase()) {
+          case 'pdf':
+            responseContentType = 'application/pdf';
+            break;
+          case 'epub':
+            responseContentType = 'application/epub+zip';
+            break;
+          case 'mobi':
+            responseContentType = 'application/x-mobipocket-ebook';
+            break;
+          case 'azw':
+          case 'azw3':
+            responseContentType = 'application/vnd.amazon.ebook';
+            break;
         }
       }
-    }
-
-    // Test 3: Supabase authentication test
-    console.log('[Diagnostic] Testing Supabase authentication...');
-    try {
-      const serviceKey = process.env.SERVICE_SUPABASESERVICE_KEY;
-      const anonKey = process.env.SERVICE_SUPABASEANON_KEY;
       
-      if (serviceKey || anonKey) {
-        const authKey = serviceKey || anonKey;
-        const keyType = serviceKey ? 'service' : 'anon';
-        
-        const authResponse = await fetch(testUrl, {
-          method: 'HEAD',
-          headers: {
-            'Authorization': `Bearer ${authKey}`,
-            'apikey': authKey
-          },
-          signal: AbortSignal.timeout(15000)
-        });
-        
-        diagnostics.results.supabaseAuth = {
-          status: 'success',
-          keyType,
-          statusCode: authResponse.status,
-          message: `Authentication test successful with ${keyType} key`
-        };
-        console.log('[Diagnostic] ✅ Supabase authentication successful');
-      } else {
-        diagnostics.results.supabaseAuth = {
-          status: 'error',
-          error: 'No Supabase keys found',
-          message: 'No authentication keys available for testing'
-        };
-        diagnostics.recommendations.push('No Supabase authentication keys found. Check environment variables.');
-      }
-    } catch (authError) {
-      diagnostics.results.supabaseAuth = {
-        status: 'error',
-        error: authError.message,
-        message: 'Supabase authentication test failed'
-      };
-      diagnostics.recommendations.push('Supabase authentication failed. Check API keys and permissions.');
-      console.log('[Diagnostic] ❌ Supabase authentication failed:', authError.message);
+      res.setHeader('Content-Type', responseContentType);
+      res.setHeader('Content-Length', contentSize);
+      res.send(responseData);
     }
 
-    // Test 4: Alternative URL patterns
-    console.log('[Diagnostic] Testing alternative URL patterns...');
-    const urlObj = new URL(testUrl);
-    const alternativeUrls = [
-      testUrl.replace('supabasekong-', '').replace('.bookzify.xyz', '.supabase.co'),
-      `${urlObj.protocol}//${urlObj.host.replace('supabasekong-', '')}/storage/v1/object/public/books/`,
-      `https://${urlObj.host.replace('.bookzify.xyz', '.supabase.co')}/storage/v1/object/public/books/`
-    ];
+    // Calculate size in MB and processing time
+    const sizeInMB = (contentSize / (1024 * 1024)).toFixed(2);
+    const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
 
-    for (const altUrl of alternativeUrls) {
-      try {
-        const altResponse = await fetch(altUrl, {
-          method: 'HEAD',
-          signal: AbortSignal.timeout(10000)
-        });
-        
-        diagnostics.results.alternativeUrls.push({
-          url: altUrl,
-          status: 'success',
-          statusCode: altResponse.status,
-          message: 'Alternative URL accessible'
-        });
-        console.log('[Diagnostic] ✅ Alternative URL works:', altUrl);
-      } catch (altError) {
-        diagnostics.results.alternativeUrls.push({
-          url: altUrl,
-          status: 'error',
-          error: altError.message,
-          message: 'Alternative URL failed'
-        });
-        console.log('[Diagnostic] ❌ Alternative URL failed:', altUrl, altError.message);
-      }
-    }
+    console.log(`[BookProxy] 📊 Content Stats:
+    • Size: ${sizeInMB} MB
+    • Type: ${isTextFormat ? 'Text' : 'Binary'} (${format || 'unknown'})
+    • Source Type: ${contentType}
+    • Processing Time: ${processingTime}s`);
 
-    // Generate final recommendations
-    if (diagnostics.results.dnsResolution?.status === 'success' && 
-        diagnostics.results.basicConnectivity?.status === 'error') {
-      diagnostics.recommendations.push('DNS works but connections fail. Check firewall rules and security groups.');
-    }
-
-    if (diagnostics.results.basicConnectivity?.status === 'success' && 
-        diagnostics.results.supabaseAuth?.status === 'error') {
-      diagnostics.recommendations.push('Basic connectivity works but auth fails. Check Supabase configuration.');
-    }
-
-    const workingAlternatives = diagnostics.results.alternativeUrls.filter(alt => alt.status === 'success');
-    if (workingAlternatives.length > 0) {
-      diagnostics.recommendations.push(`Consider using alternative URL patterns: ${workingAlternatives.map(alt => alt.url).join(', ')}`);
-    }
-
-    if (diagnostics.recommendations.length === 0) {
-      diagnostics.recommendations.push('All tests passed. The connectivity issue may be intermittent.');
-    }
+    console.log(`[BookProxy] ✅ Successfully proxied ${format || 'unknown'} content`);
 
   } catch (error) {
-    console.error('[Diagnostic] ❌ Diagnostic test error:', error);
-    diagnostics.results.error = error.message;
-    diagnostics.recommendations.push('Diagnostic test failed. Check server logs for details.');
+    console.error('[BookProxy] ❌ Error:', error);
+    res.status(500).json({
+      error: 'Internal server error while fetching book content',
+      details: error.message
+    });
   }
-
-  console.log('[Diagnostic] Test completed');
-  res.json(diagnostics);
 });
 
 // Helper functions for handling different URL types
 async function handleSupabaseUrl(url) {
   console.log('[BookProxy] Handling Supabase URL');
+  
+  // Production-friendly fetch configuration
+  const fetchConfig = {
+    timeout: 60000, // 60 seconds instead of 10
+    signal: AbortSignal.timeout(60000), // Add abort signal for Node.js 16+
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'Accept': '*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Connection': 'keep-alive'
+    }
+  };
   
   try {
     // Parse the Supabase URL to extract the base URL and file path
@@ -581,20 +500,7 @@ async function handleSupabaseUrl(url) {
       filePath
     });
     
-    // Production-optimized fetch configuration
-    const fetchConfig = {
-      method: 'GET',
-      headers: {
-        'Accept': '*/*',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Connection': 'keep-alive',
-        'Accept-Encoding': 'gzip, deflate, br'
-      },
-      // Increase timeout for production (30 seconds instead of default 10)
-      signal: AbortSignal.timeout(30000)
-    };
-    
-    // Method 1: Use direct storage API endpoint with enhanced error handling
+    // Method 1: Use direct storage API endpoint with increased timeout
     try {
       const storageApiUrl = `${urlObj.protocol}//${urlObj.host}/storage/v1/object/${bucketName}/${filePath}`;
       console.log(`[BookProxy] Method 1: Using direct storage API: ${storageApiUrl}`);
@@ -611,12 +517,13 @@ async function handleSupabaseUrl(url) {
       console.log(`[BookProxy] Using ${serviceKey ? 'service' : 'anon'} key for authentication`);
       
       const response = await fetch(storageApiUrl, {
-        ...fetchConfig,
+        method: 'GET',
         headers: {
-          ...fetchConfig.headers,
           'Authorization': `Bearer ${authKey}`,
-          'apikey': authKey
-        }
+          'apikey': authKey,
+          ...fetchConfig.headers
+        },
+        signal: fetchConfig.signal
       });
       
       if (response.ok) {
@@ -631,138 +538,69 @@ async function handleSupabaseUrl(url) {
     } catch (directApiError) {
       console.log(`[BookProxy] Method 1 failed: ${directApiError.message}`);
       
-      // Method 2: Try alternative URL patterns for production
+      // Method 2: Try Supabase client as fallback
       try {
-        console.log(`[BookProxy] Method 2: Trying alternative URL patterns`);
+        console.log(`[BookProxy] Method 2: Using Supabase client fallback`);
+        const { data, error } = await supabase.storage
+          .from(bucketName)
+          .createSignedUrl(filePath, 300); // 5 minutes expiry
         
-        // Try different URL configurations that might work better in production
-        const alternativeUrls = [
-          // Original public URL
-          url,
-          // Direct API endpoint without authentication
-          `${urlObj.protocol}//${urlObj.host}/storage/v1/object/public/${bucketName}/${filePath}`,
-          // Try with different subdomain pattern
-          url.replace('supabasekong-', '').replace('.bookzify.xyz', '.supabase.co')
-        ];
-        
-        for (const altUrl of alternativeUrls) {
-          try {
-            console.log(`[BookProxy] Trying alternative URL: ${altUrl}`);
-            const altResponse = await fetch(altUrl, fetchConfig);
-            
-            if (altResponse.ok) {
-              console.log(`[BookProxy] ✅ Alternative URL successful: ${altUrl}`);
-              return altResponse;
-            }
-          } catch (altError) {
-            console.log(`[BookProxy] Alternative URL failed: ${altUrl} - ${altError.message}`);
-            continue;
-          }
+        if (error) {
+          console.log(`[BookProxy] Method 2 error:`, error);
+          throw error;
         }
         
-        throw new Error('All alternative URLs failed');
-      } catch (altUrlError) {
-        console.log(`[BookProxy] Method 2 failed: ${altUrlError.message}`);
-        
-        // Method 3: Try Supabase client as fallback with increased timeout
-        try {
-          console.log(`[BookProxy] Method 3: Using Supabase client fallback`);
-          
-          // Create a custom fetch function with longer timeout for Supabase client
-          const customFetch = (url, options = {}) => {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-            
-            return fetch(url, {
-              ...options,
-              signal: controller.signal
-            }).finally(() => clearTimeout(timeoutId));
-          };
-          
-          // Create a Supabase client with custom fetch
-          const prodSupabase = createClient(supabaseUrl, supabaseKey, {
-            global: {
-              fetch: customFetch
-            }
-          });
-          
-          const { data, error } = await prodSupabase.storage
-            .from(bucketName)
-            .createSignedUrl(filePath, 300); // 5 minutes expiry
-          
-          if (error) {
-            console.log(`[BookProxy] Method 3 error:`, error);
-            throw error;
-          }
-          
-          if (!data?.signedUrl) {
-            throw new Error('No signed URL returned from Supabase client');
-          }
-          
-          console.log('[BookProxy] ✅ Got signed URL from client:', data.signedUrl);
-          
-          // Fetch using the signed URL with extended timeout
-          const signedResponse = await fetch(data.signedUrl, fetchConfig);
-          if (signedResponse.ok) {
-            console.log('[BookProxy] ✅ Successfully downloaded file using client signed URL');
-            return signedResponse;
-          } else {
-            throw new Error(`Failed to download using client signed URL: ${signedResponse.status}`);
-          }
-        } catch (clientError) {
-          console.log(`[BookProxy] Method 3 failed: ${clientError.message}`);
-          throw clientError;
+        if (!data?.signedUrl) {
+          throw new Error('No signed URL returned from Supabase client');
         }
+        
+        console.log('[BookProxy] ✅ Got signed URL from client:', data.signedUrl);
+        
+        // Fetch using the signed URL with extended timeout
+        const signedResponse = await fetch(data.signedUrl, {
+          method: 'GET',
+          headers: fetchConfig.headers,
+          signal: fetchConfig.signal
+        });
+        
+        if (signedResponse.ok) {
+          console.log('[BookProxy] ✅ Successfully downloaded file using client signed URL');
+          return signedResponse;
+        } else {
+          throw new Error(`Failed to download using client signed URL: ${signedResponse.status}`);
+        }
+      } catch (clientError) {
+        console.log(`[BookProxy] Method 2 failed: ${clientError.message}`);
+        throw clientError;
       }
     }
   } catch (error) {
     console.error('[BookProxy] Error with all Supabase methods:', error);
-    
-    // Method 4: Final fallback - try direct fetch with production-optimized settings
-    console.log('[BookProxy] Method 4: Final fallback with optimized direct fetch');
-    try {
-      return await fetch(url, {
-        method: 'GET',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-          'Accept': '*/*',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Accept-Encoding': 'gzip, deflate, br',
-          'Connection': 'keep-alive',
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        },
-        // Extended timeout for production
-        signal: AbortSignal.timeout(45000), // 45 seconds
-        // Add these for better production compatibility
-        keepalive: false,
-        redirect: 'follow'
-      });
-    } catch (finalError) {
-      console.error('[BookProxy] All methods failed, including final fallback:', finalError);
-      throw new Error(`All connection methods failed. Last error: ${finalError.message}`);
-    }
+    // Fallback to direct fetch if all methods fail
+    console.log('[BookProxy] Falling back to direct fetch');
+    return await fetch(url, {
+      method: 'GET',
+      headers: fetchConfig.headers,
+      signal: fetchConfig.signal
+    });
   }
 }
 
 async function handleS3Url(url) {
   console.log('[BookProxy] Handling S3 URL');
-  // For S3 URLs, use production-optimized fetch
+  // For S3 URLs, we can fetch directly with extended timeout
   return await fetch(url, {
     method: 'GET',
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-      'Accept': '*/*',
-      'Connection': 'keep-alive'
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     },
-    signal: AbortSignal.timeout(30000), // 30 second timeout
-    redirect: 'follow'
+    signal: AbortSignal.timeout(60000) // 60 seconds timeout
   });
 }
 
 async function handleExternalUrl(url) {
   console.log('[BookProxy] Handling external URL');
-  // For external URLs, use custom headers with production optimizations
+  // For external URLs, use custom headers to avoid blocking with extended timeout
   return await fetch(url, {
     method: 'GET',
     headers: {
@@ -777,223 +615,9 @@ async function handleExternalUrl(url) {
       'Sec-Fetch-User': '?1',
       'Upgrade-Insecure-Requests': '1'
     },
-    signal: AbortSignal.timeout(30000), // 30 second timeout
-    redirect: 'follow'
+    signal: AbortSignal.timeout(60000) // 60 seconds timeout
   });
 }
-
-// Book content proxy endpoint
-app.post('/api/proxy/book-content', async (req, res) => {
-  try {
-    const { url, format } = req.body;
-    const startTime = Date.now();
-    
-    if (!url) {
-      return res.status(400).json({ 
-        error: 'Missing required field: url' 
-      });
-    }
-
-    console.log(`[BookProxy] 📥 Fetching ${format || 'unknown'} content from:`, url);
-    console.log(`[BookProxy] Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`[BookProxy] Using service key:`, process.env.SERVICE_SUPABASESERVICE_KEY ? 'Yes' : 'No');
-    console.log(`[BookProxy] Using anon key:`, process.env.SERVICE_SUPABASEANON_KEY ? 'Yes' : 'No');
-
-    // Handle different URL types
-    let response;
-    
-    try {
-      if (url.includes('supabase')) {
-        response = await handleSupabaseUrl(url);
-      } else if (url.includes('s3.amazonaws.com') || url.includes('amazonaws.com')) {
-        response = await handleS3Url(url);
-      } else {
-        response = await handleExternalUrl(url);
-      }
-    } catch (connectionError) {
-      console.error(`[BookProxy] ❌ Connection error: ${connectionError.message}`);
-      
-      // If this is a connection timeout, provide specific guidance
-      if (connectionError.message.includes('timeout') || connectionError.message.includes('TIMEOUT')) {
-        return res.status(504).json({
-          error: 'Gateway Timeout',
-          message: 'Unable to connect to the book storage service. This may be a temporary network issue.',
-          details: connectionError.message,
-          retryAfter: 30,
-          troubleshooting: {
-            suggestion: 'Please try again in a few moments. If the issue persists, the storage service may be temporarily unavailable.',
-            isTemporary: true
-          }
-        });
-      }
-      
-      // If this is a DNS or host resolution error
-      if (connectionError.message.includes('ENOTFOUND') || connectionError.message.includes('getaddrinfo')) {
-        return res.status(502).json({
-          error: 'Bad Gateway',
-          message: 'Unable to resolve the book storage service. This may be a DNS or network configuration issue.',
-          details: connectionError.message,
-          troubleshooting: {
-            suggestion: 'Please check your network connection and try again.',
-            isTemporary: false
-          }
-        });
-      }
-      
-      // Generic connection error
-      return res.status(503).json({
-        error: 'Service Unavailable',
-        message: 'Unable to connect to the book storage service.',
-        details: connectionError.message,
-        troubleshooting: {
-          suggestion: 'Please try again later. If the issue persists, contact support.',
-          isTemporary: true
-        }
-      });
-    }
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Unable to read error response');
-      console.error(`[BookProxy] ❌ Error fetching content: ${response.status} ${response.statusText}`);
-      console.error(`[BookProxy] Error details:`, errorText);
-      
-      // Provide more specific error messages based on status codes
-      let errorMessage = 'Failed to fetch book content';
-      let troubleshooting = {};
-      
-      switch (response.status) {
-        case 403:
-          errorMessage = 'Access denied to book content';
-          troubleshooting = {
-            suggestion: 'The book may be restricted or require authentication.',
-            isTemporary: false
-          };
-          break;
-        case 404:
-          errorMessage = 'Book content not found';
-          troubleshooting = {
-            suggestion: 'The book may have been moved or deleted.',
-            isTemporary: false
-          };
-          break;
-        case 429:
-          errorMessage = 'Too many requests to book storage service';
-          troubleshooting = {
-            suggestion: 'Please wait a moment before trying again.',
-            isTemporary: true,
-            retryAfter: 60
-          };
-          break;
-        case 500:
-        case 502:
-        case 503:
-        case 504:
-          errorMessage = 'Book storage service is temporarily unavailable';
-          troubleshooting = {
-            suggestion: 'Please try again in a few minutes.',
-            isTemporary: true,
-            retryAfter: 120
-          };
-          break;
-        default:
-          troubleshooting = {
-            suggestion: 'Please try again or contact support if the issue persists.',
-            isTemporary: true
-          };
-      }
-      
-      return res.status(response.status).json({
-        error: errorMessage,
-        details: `${response.status} ${response.statusText}`,
-        troubleshooting,
-        serverResponse: errorText.substring(0, 500) // Limit error response size
-      });
-    }
-
-    // Get content type from response headers
-    const contentType = response.headers.get('content-type') || 'unknown';
-    console.log(`[BookProxy] 📄 Content-Type from source:`, contentType);
-
-    // Determine response type based on format
-    const isTextFormat = format && ['txt', 'html'].includes(format.toLowerCase());
-    
-    let contentSize = 0;
-    let responseData;
-
-    try {
-      if (isTextFormat) {
-        responseData = await response.text();
-        contentSize = Buffer.from(responseData).length;
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.send(responseData);
-      } else {
-        // Binary format (PDF, EPUB, etc.)
-        const arrayBuffer = await response.arrayBuffer();
-        responseData = Buffer.from(arrayBuffer);
-        contentSize = responseData.length;
-        
-        // Set appropriate content type based on format
-        let responseContentType = 'application/octet-stream';
-        if (format) {
-          switch (format.toLowerCase()) {
-            case 'pdf':
-              responseContentType = 'application/pdf';
-              break;
-            case 'epub':
-              responseContentType = 'application/epub+zip';
-              break;
-            case 'mobi':
-              responseContentType = 'application/x-mobipocket-ebook';
-              break;
-            case 'azw':
-            case 'azw3':
-              responseContentType = 'application/vnd.amazon.ebook';
-              break;
-          }
-        }
-        
-        res.setHeader('Content-Type', responseContentType);
-        res.setHeader('Content-Length', contentSize);
-        res.send(responseData);
-      }
-
-      // Calculate size in MB and processing time
-      const sizeInMB = (contentSize / (1024 * 1024)).toFixed(2);
-      const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
-
-      console.log(`[BookProxy] 📊 Content Stats:
-      • Size: ${sizeInMB} MB
-      • Type: ${isTextFormat ? 'Text' : 'Binary'} (${format || 'unknown'})
-      • Source Type: ${contentType}
-      • Processing Time: ${processingTime}s`);
-
-      console.log(`[BookProxy] ✅ Successfully proxied ${format || 'unknown'} content`);
-    } catch (dataProcessingError) {
-      console.error('[BookProxy] ❌ Error processing response data:', dataProcessingError);
-      return res.status(500).json({
-        error: 'Failed to process book content',
-        message: 'The book content was received but could not be processed.',
-        details: dataProcessingError.message,
-        troubleshooting: {
-          suggestion: 'The book file may be corrupted or in an unsupported format.',
-          isTemporary: false
-        }
-      });
-    }
-
-  } catch (error) {
-    console.error('[BookProxy] ❌ Unexpected error:', error);
-    res.status(500).json({
-      error: 'Internal server error while fetching book content',
-      message: 'An unexpected error occurred on the server.',
-      details: error.message,
-      troubleshooting: {
-        suggestion: 'Please try again. If the issue persists, contact support.',
-        isTemporary: true
-      }
-    });
-  }
-});
 
 // API documentation endpoint
 app.get('/', (req, res) => {
@@ -1001,11 +625,8 @@ app.get('/', (req, res) => {
     message: 'BookHub API Service',
     version: '1.0.0',
     endpoints: {
-      // Health and diagnostic endpoints
-      'GET /health': 'Health check with service status',
-      'GET /diagnostic': 'Network connectivity diagnostic tool (supports ?url= parameter)',
-      
       // Book-related endpoints
+      'GET /health': 'Health check with service status',
       'GET /books/search?query=<term>&page=<num>&limit=<num>&source=<source>': 'Search books from multiple sources',
       'POST /books/download': 'Download a book (requires url, title, author, format, category in body)',
       'POST /api/proxy/book-content': 'Proxy book content to resolve CORS issues (requires url and optional format in body)',
@@ -1026,15 +647,9 @@ app.get('/', (req, res) => {
       'Search default (ebook-hunter)': '/books/search?query=javascript',
       'Proxy book content': 'POST /api/proxy/book-content with { "url": "https://example.com/book.pdf", "format": "pdf" }',
       'OpenRouter Chat': 'POST /api/openrouter/chat with standard OpenRouter chat completion payload',
-      'Hugging Face': 'POST /api/huggingface/inference with model name and inference payload',
-      'Diagnostic test': '/diagnostic or /diagnostic?url=https://your-supabase-url.com/file.pdf'
+      'Hugging Face': 'POST /api/huggingface/inference with model name and inference payload'
     },
-    troubleshooting: {
-      'Connection timeouts': 'Use /diagnostic endpoint to test connectivity',
-      'Supabase issues': 'Check environment variables and use /diagnostic for testing',
-      'CORS errors': 'Use /api/proxy/book-content endpoint instead of direct requests'
-    },
-    cors: 'Enabled for localhost development and production domains'
+    cors: 'Enabled for localhost development'
   });
 });
 
