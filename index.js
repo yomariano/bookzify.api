@@ -650,14 +650,15 @@ async function checkBookExists(downloadUrl) {
 const app = express();
 const PORT = process.env.PORT || 5005;
 
-// Enhanced CORS configuration
+// Enhanced CORS configuration for main domain API serving
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
     ? [
-        // Production domains
+        // Production domains - serving API from main domain
         'https://bookzify.xyz',
         'https://www.bookzify.xyz',
-        'https://api.bookzify.xyz'
+        // Remove api.bookzify.xyz since we're serving from main domain path
+        // 'https://api.bookzify.xyz'  // Commented out - subdomain not working
       ]
     : [
         // Development origins
