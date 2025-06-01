@@ -17,15 +17,14 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Initialize Supabase clients - separate for different purposes
+// Initialize Supabase client
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseAnonKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE_ANON_KEY;
-const supabaseServiceKey = process.env.SERVICE_SUPABASESERVICE_KEY || process.env.SUPABASE_SERVICE_KEY;
+const supabaseKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE_ANON_KEY;
 
 // Validate required environment variables
 const requiredEnvVars = {
   'SUPABASE_URL': supabaseUrl,
-  'SERVICE_SUPABASEANON_KEY or SUPABASE_ANON_KEY': supabaseAnonKey,
+  'SERVICE_SUPABASEANON_KEY or SUPABASE_ANON_KEY': supabaseKey,
   'VITE_OPENROUTER_API_KEY': process.env.VITE_OPENROUTER_API_KEY,
   'VITE_HUGGINGFACE_API_KEY': process.env.VITE_HUGGINGFACE_API_KEY
 };
@@ -39,25 +38,12 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
-// Create two Supabase clients:
-// 1. For client-side operations (with anon key)
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+console.log('🔧 Supabase Configuration:');
+console.log(`   URL: ${supabaseUrl}`);
+console.log(`   Key: ${supabaseKey ? '***' + supabaseKey.slice(-4) : 'Not found'}`);
+console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
 
-// 2. For backend operations (with service key to bypass RLS)
-const supabaseAdmin = supabaseServiceKey 
-  ? createClient(supabaseUrl, supabaseServiceKey, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false
-      }
-    })
-  : supabase; // Fallback to anon client if no service key
-
-console.log('🔧 Supabase clients initialized:', {
-  hasAnonKey: !!supabaseAnonKey,
-  hasServiceKey: !!supabaseServiceKey,
-  usingAdminClient: !!supabaseServiceKey
-});
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Support multiple book sources
 const BOOK_SOURCES = {
@@ -117,8 +103,8 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
     const contentType = getContentType(sanitizedFileName);
     console.log(`📄 Content type: ${contentType}`);
     
-    // Upload to Supabase storage bucket 'books' using admin client
-    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+    // Upload to Supabase storage bucket 'books'
+    const { data: uploadData, error: uploadError } = await supabase.storage
       .from('books')
       .upload(uniqueFileName, fileBuffer, {
         contentType: contentType,
@@ -133,14 +119,14 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
     console.log('✅ File uploaded to storage:', uploadData.path);
 
     // Get the public URL for the uploaded file
-    const { data: urlData } = supabaseAdmin.storage
+    const { data: urlData } = supabase.storage
       .from('books')
       .getPublicUrl(uploadData.path);
 
     const s3BucketUrl = urlData.publicUrl;
     console.log('🔗 Public URL generated:', s3BucketUrl);
 
-    // Insert book record into the database using admin client to bypass RLS
+    // Insert book record into the database
     const bookRecord = {
       id: crypto.randomUUID(),
       title: bookMetadata.title || 'Unknown Title',
@@ -160,8 +146,8 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
       updated_at: new Date().toISOString()
     };
 
-    console.log('💾 Inserting book record into database using admin client...');
-    const { data: insertData, error: insertError } = await supabaseAdmin
+    console.log('💾 Inserting book record into database...');
+    const { data: insertData, error: insertError } = await supabase
       .from('books')
       .insert([bookRecord])
       .select()
@@ -171,7 +157,7 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
       console.error('❌ Database insert error:', insertError);
       // If database insert fails, try to clean up the uploaded file
       try {
-        await supabaseAdmin.storage.from('books').remove([uploadData.path]);
+        await supabase.storage.from('books').remove([uploadData.path]);
         console.log('🧹 Cleaned up uploaded file after database error');
       } catch (cleanupError) {
         console.error('❌ Failed to cleanup uploaded file:', cleanupError);
@@ -196,7 +182,7 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
 // Helper function to check if book already exists
 async function checkBookExists(downloadUrl) {
   try {
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await supabase
       .from('books')
       .select('id, s3_bucket_url')
       .eq('download_url', downloadUrl)
@@ -369,8 +355,64 @@ app.get('/health', (req, res) => {
       openrouter: !!process.env.VITE_OPENROUTER_API_KEY,
       huggingface: !!process.env.VITE_HUGGINGFACE_API_KEY,
       supabase: !!process.env.SUPABASE_URL
+    },
+    supabase: {
+      url: process.env.SUPABASE_URL || 'Not configured',
+      hasAnonKey: !!process.env.SERVICE_SUPABASEANON_KEY,
+      hasServiceKey: !!process.env.SERVICE_SUPABASESERVICE_KEY,
+      environment: process.env.NODE_ENV || 'development'
     }
   });
+});
+
+// Test endpoint for Supabase URL construction
+app.get('/test-supabase-url', (req, res) => {
+  try {
+    const testUrl = req.query.url || 'https://supabasekong-g00sk4cwgwk0cwkc8kcgc8gk.bookzify.xyz/storage/v1/object/public/books/test-file.pdf';
+    
+    // Parse the URL like handleSupabaseUrl does
+    const urlObj = new URL(testUrl);
+    const pathParts = urlObj.pathname.split('/');
+    const bucketIndex = pathParts.findIndex(part => part === 'public' || part === 'sign');
+    
+    if (bucketIndex === -1 || bucketIndex + 2 >= pathParts.length) {
+      return res.status(400).json({ error: 'Invalid Supabase storage URL format' });
+    }
+    
+    const bucketName = pathParts[bucketIndex + 1];
+    const filePath = pathParts.slice(bucketIndex + 2).join('/');
+    
+    // Construct the storage API URL using environment variable
+    const supabaseBaseUrl = process.env.SUPABASE_URL;
+    const storageApiUrl = `${supabaseBaseUrl}/storage/v1/object/${bucketName}/${filePath}`;
+    
+    res.json({
+      originalUrl: testUrl,
+      parsedUrl: {
+        protocol: urlObj.protocol,
+        host: urlObj.host,
+        pathname: urlObj.pathname,
+        pathParts,
+        bucketIndex,
+        bucketName,
+        filePath
+      },
+      supabaseConfig: {
+        baseUrl: supabaseBaseUrl,
+        constructedStorageUrl: storageApiUrl
+      },
+      comparison: {
+        originalHost: urlObj.host,
+        configuredHost: supabaseBaseUrl ? new URL(supabaseBaseUrl).host : 'N/A',
+        portMismatch: urlObj.host !== (supabaseBaseUrl ? new URL(supabaseBaseUrl).host : '')
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to test URL construction',
+      message: error.message
+    });
+  }
 });
 
 // Book content proxy endpoint
@@ -481,19 +523,6 @@ app.post('/api/proxy/book-content', async (req, res) => {
 async function handleSupabaseUrl(url) {
   console.log('[BookProxy] Handling Supabase URL');
   
-  // Production-friendly fetch configuration
-  const fetchConfig = {
-    timeout: 60000, // 60 seconds instead of 10
-    signal: AbortSignal.timeout(60000), // Add abort signal for Node.js 16+
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-      'Accept': '*/*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Connection': 'keep-alive'
-    }
-  };
-  
   try {
     // Parse the Supabase URL to extract the base URL and file path
     const urlObj = new URL(url);
@@ -519,13 +548,21 @@ async function handleSupabaseUrl(url) {
       filePath
     });
     
-    // Method 1: Use direct storage API endpoint with increased timeout
+    // Method 1: Use direct storage API endpoint with proper base URL
     try {
-      const storageApiUrl = `${urlObj.protocol}//${urlObj.host}/storage/v1/object/${bucketName}/${filePath}`;
-      console.log(`[BookProxy] Method 1: Using direct storage API: ${storageApiUrl}`);
+      // Use the SUPABASE_URL environment variable to get the correct base URL
+      // This ensures we use the right port (8000 in production, 443 in other environments)
+      const supabaseBaseUrl = process.env.SUPABASE_URL;
+      if (!supabaseBaseUrl) {
+        throw new Error('SUPABASE_URL environment variable not found');
+      }
       
-      const serviceKey = supabaseServiceKey;
-      const anonKey = supabaseAnonKey;
+      const storageApiUrl = `${supabaseBaseUrl}/storage/v1/object/${bucketName}/${filePath}`;
+      console.log(`[BookProxy] Method 1: Using direct storage API: ${storageApiUrl}`);
+      console.log(`[BookProxy] Base URL from env: ${supabaseBaseUrl}`);
+      
+      const serviceKey = process.env.SERVICE_SUPABASESERVICE_KEY;
+      const anonKey = process.env.SERVICE_SUPABASEANON_KEY;
       
       if (!serviceKey && !anonKey) {
         throw new Error('No Supabase keys found');
@@ -535,34 +572,46 @@ async function handleSupabaseUrl(url) {
       const authKey = serviceKey || anonKey;
       console.log(`[BookProxy] Using ${serviceKey ? 'service' : 'anon'} key for authentication`);
       
-      const response = await fetch(storageApiUrl, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${authKey}`,
-          'apikey': authKey,
-          ...fetchConfig.headers
-        },
-        signal: fetchConfig.signal
-      });
+      // Add timeout to prevent hanging requests in production
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
       
-      if (response.ok) {
-        console.log(`[BookProxy] ✅ Method 1 successful with direct storage API`);
-        return response;
-      } else {
-        const errorText = await response.text();
-        console.log(`[BookProxy] Method 1 failed: ${response.status}`);
-        console.log(`[BookProxy] Error details:`, errorText);
-        throw new Error(`Direct storage API call failed: ${response.status}`);
+      try {
+        const response = await fetch(storageApiUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${authKey}`,
+            'apikey': authKey,
+            'Accept': '*/*',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
+          },
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          console.log(`[BookProxy] ✅ Method 1 successful with direct storage API`);
+          return response;
+        } else {
+          const errorText = await response.text();
+          console.log(`[BookProxy] Method 1 failed: ${response.status}`);
+          console.log(`[BookProxy] Error details:`, errorText);
+          throw new Error(`Direct storage API call failed: ${response.status}`);
+        }
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        throw fetchError;
       }
     } catch (directApiError) {
       console.log(`[BookProxy] Method 1 failed: ${directApiError.message}`);
       
-      // Method 2: Try Supabase admin client as fallback
+      // Method 2: Try Supabase client as fallback
       try {
-        console.log(`[BookProxy] Method 2: Using Supabase admin client fallback`);
-        const { data, error } = await supabaseAdmin.storage
+        console.log(`[BookProxy] Method 2: Using Supabase client fallback`);
+        const { data, error } = await supabase.storage
           .from(bucketName)
-          .createSignedUrl(filePath, 300); // 5 minutes expiry
+          .createSignedUrl(filePath, 60); // 60 seconds expiry
         
         if (error) {
           console.log(`[BookProxy] Method 2 error:`, error);
@@ -575,13 +624,8 @@ async function handleSupabaseUrl(url) {
         
         console.log('[BookProxy] ✅ Got signed URL from client:', data.signedUrl);
         
-        // Fetch using the signed URL with extended timeout
-        const signedResponse = await fetch(data.signedUrl, {
-          method: 'GET',
-          headers: fetchConfig.headers,
-          signal: fetchConfig.signal
-        });
-        
+        // Fetch using the signed URL
+        const signedResponse = await fetch(data.signedUrl);
         if (signedResponse.ok) {
           console.log('[BookProxy] ✅ Successfully downloaded file using client signed URL');
           return signedResponse;
@@ -599,27 +643,27 @@ async function handleSupabaseUrl(url) {
     console.log('[BookProxy] Falling back to direct fetch');
     return await fetch(url, {
       method: 'GET',
-      headers: fetchConfig.headers,
-      signal: fetchConfig.signal
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
     });
   }
 }
 
 async function handleS3Url(url) {
   console.log('[BookProxy] Handling S3 URL');
-  // For S3 URLs, we can fetch directly with extended timeout
+  // For S3 URLs, we can fetch directly
   return await fetch(url, {
     method: 'GET',
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    },
-    signal: AbortSignal.timeout(60000) // 60 seconds timeout
+    }
   });
 }
 
 async function handleExternalUrl(url) {
   console.log('[BookProxy] Handling external URL');
-  // For external URLs, use custom headers to avoid blocking with extended timeout
+  // For external URLs, use custom headers to avoid blocking
   return await fetch(url, {
     method: 'GET',
     headers: {
@@ -634,7 +678,7 @@ async function handleExternalUrl(url) {
       'Sec-Fetch-User': '?1',
       'Upgrade-Insecure-Requests': '1'
     },
-    signal: AbortSignal.timeout(60000) // 60 seconds timeout
+    timeout: 30000 // 30 second timeout
   });
 }
 
@@ -646,6 +690,7 @@ app.get('/', (req, res) => {
     endpoints: {
       // Book-related endpoints
       'GET /health': 'Health check with service status',
+      'GET /test-supabase-url?url=<supabase_url>': 'Test Supabase URL construction and configuration',
       'GET /books/search?query=<term>&page=<num>&limit=<num>&source=<source>': 'Search books from multiple sources',
       'POST /books/download': 'Download a book (requires url, title, author, format, category in body)',
       'POST /api/proxy/book-content': 'Proxy book content to resolve CORS issues (requires url and optional format in body)',
@@ -664,6 +709,7 @@ app.get('/', (req, res) => {
       'Search ebook-hunter': '/books/search?query=javascript&source=ebook-hunter',
       'Search Anna\'s Archive': '/books/search?query=javascript&source=annas-archive',
       'Search default (ebook-hunter)': '/books/search?query=javascript',
+      'Test Supabase URL': '/test-supabase-url?url=https://your-supabase-url/storage/v1/object/public/books/file.pdf',
       'Proxy book content': 'POST /api/proxy/book-content with { "url": "https://example.com/book.pdf", "format": "pdf" }',
       'OpenRouter Chat': 'POST /api/openrouter/chat with standard OpenRouter chat completion payload',
       'Hugging Face': 'POST /api/huggingface/inference with model name and inference payload'
@@ -781,7 +827,7 @@ app.get('/books/search', async (req, res) => {
       // Launch browser with specific options
       console.log('🌐 Launching browser...');
       browser = await chromium.launch({
-        headless: process.env.PLAYWRIGHT_HEADLESS !== 'false', // Set PLAYWRIGHT_HEADLESS=false for debugging
+        headless: true,  // Changed to true for production environment
         args: ['--no-sandbox', '--disable-setuid-sandbox']
       });
       
@@ -1224,7 +1270,7 @@ app.post('/books/download', async (req, res) => {
 
       // Launch browser with headless=false like Python (change to true for production)
       browser = await chromium.launch({
-        headless: process.env.PLAYWRIGHT_HEADLESS !== 'false', // Set PLAYWRIGHT_HEADLESS=false for debugging
+        headless: false, // Changed from true to match Python
         args: ['--no-sandbox', '--disable-setuid-sandbox']
       });
 
