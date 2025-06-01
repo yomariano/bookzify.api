@@ -17,6 +17,34 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Temporary diagnostic: Log available environment variables
+console.log('🔍 Environment variable diagnostics:');
+console.log(`📡 NODE_ENV: ${process.env.NODE_ENV || 'not set'}`);
+console.log(`🔗 SUPABASE_URL: ${process.env.SUPABASE_URL ? 'set' : 'not set'}`);
+console.log(`🔑 SERVICE_SUPABASEANON_KEY: ${process.env.SERVICE_SUPABASEANON_KEY ? 'set' : 'not set'}`);
+console.log(`🔑 SUPABASE_ANON_KEY: ${process.env.SUPABASE_ANON_KEY ? 'set' : 'not set'}`);
+console.log(`🔑 SERVICE_SUPABASESERVICE_KEY: ${process.env.SERVICE_SUPABASESERVICE_KEY ? 'set' : 'not set'}`);
+console.log(`🔒 POSTGRES_PASSWORD: ${process.env.POSTGRES_PASSWORD ? 'set' : 'not set'}`);
+
+// Look for any environment variables that might contain Supabase URLs
+const allEnvVars = Object.keys(process.env).filter(key => 
+  key.toLowerCase().includes('supabase') || 
+  key.toLowerCase().includes('url') ||
+  key.toLowerCase().includes('host')
+);
+console.log('🌐 Supabase/URL-related environment variables found:', allEnvVars);
+
+if (process.env.SUPABASE_URL) {
+  console.log(`📍 SUPABASE_URL value: ${process.env.SUPABASE_URL}`);
+} else {
+  console.log('❌ SUPABASE_URL is not set');
+  // Look for alternative URL variables
+  const urlVars = allEnvVars.filter(key => key.includes('URL') || key.includes('url'));
+  if (urlVars.length > 0) {
+    console.log('🔍 Found other URL variables:', urlVars.map(key => `${key}=${process.env[key] ? 'set' : 'not set'}`));
+  }
+}
+
 // Enhanced Supabase connection validation
 async function validateSupabaseConnection(supabaseClient, connectionString) {
   try {
@@ -56,14 +84,18 @@ async function validateSupabaseConnection(supabaseClient, connectionString) {
 // Initialize Supabase client with environment-specific URL
 let supabaseUrl;
 if (process.env.NODE_ENV === 'production') {
-  // For production, use PostgreSQL connection string format
-  const postgresPassword = process.env.POSTGRES_PASSWORD;
-  if (!postgresPassword) {
-    console.error('❌ POSTGRES_PASSWORD is required for production environment');
+  // For production, we still need to use the Supabase HTTP URL, not a PostgreSQL connection string
+  // The Supabase JavaScript client connects to the REST API, not directly to PostgreSQL
+  supabaseUrl = process.env.SUPABASE_URL;
+  
+  if (!supabaseUrl) {
+    console.error('❌ SUPABASE_URL is required for production environment');
+    console.error('💡 The Supabase JavaScript client requires an HTTP/HTTPS URL like: https://your-project.supabase.co');
+    console.error('💡 It cannot use PostgreSQL connection strings directly.');
     process.exit(1);
   }
-  supabaseUrl = `postgresql://postgres:${postgresPassword}@supabase-db:5432/postgres`;
-  console.log('🔧 Using PostgreSQL connection string for production');
+  
+  console.log('🔧 Using Supabase REST API URL for production');
 } else {
   // For development, use the standard Supabase URL
   supabaseUrl = process.env.SUPABASE_URL;
@@ -74,11 +106,17 @@ const supabaseKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE
 
 // Enhanced environment variable validation
 const requiredEnvVars = {
-  'SUPABASE_URL or POSTGRES_PASSWORD (for prod)': process.env.NODE_ENV === 'production' ? process.env.POSTGRES_PASSWORD : supabaseUrl,
+  'SUPABASE_URL': supabaseUrl,
   'SERVICE_SUPABASEANON_KEY or SUPABASE_ANON_KEY': supabaseKey,
   'VITE_OPENROUTER_API_KEY': process.env.VITE_OPENROUTER_API_KEY,
   'VITE_HUGGINGFACE_API_KEY': process.env.VITE_HUGGINGFACE_API_KEY
 };
+
+// Optional validation for PostgreSQL credentials (for direct DB access if needed later)
+if (process.env.NODE_ENV === 'production' && process.env.POSTGRES_PASSWORD) {
+  console.log('📝 PostgreSQL credentials available for direct database access if needed');
+  console.log(`🔗 PostgreSQL connection: postgresql://postgres:***@supabase-db:5432/postgres`);
+}
 
 const missingEnvVars = Object.entries(requiredEnvVars)
   .filter(([key, value]) => !value)
