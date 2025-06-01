@@ -17,13 +17,28 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Initialize Supabase client
-const supabaseUrl = process.env.SUPABASE_URL;
+// Initialize Supabase client with environment-specific URL
+let supabaseUrl;
+if (process.env.NODE_ENV === 'production') {
+  // For production, use PostgreSQL connection string format
+  const postgresPassword = process.env.SERVICE_PASSWORD_POSTGRES;
+  if (!postgresPassword) {
+    console.error('❌ POSTGRES_PASSWORD is required for production environment');
+    process.exit(1);
+  }
+  supabaseUrl = `postgresql://postgres:${postgresPassword}@supabase-db:5432/postgres`;
+  console.log('🔧 Using PostgreSQL connection string for production');
+} else {
+  // For development, use the standard Supabase URL
+  supabaseUrl = process.env.SUPABASE_URL;
+  console.log('🔧 Using standard Supabase URL for development');
+}
+
 const supabaseKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE_ANON_KEY;
 
 // Validate required environment variables
 const requiredEnvVars = {
-  'SUPABASE_URL': supabaseUrl,
+  'SUPABASE_URL or POSTGRES_PASSWORD (for prod)': process.env.NODE_ENV === 'production' ? process.env.POSTGRES_PASSWORD : supabaseUrl,
   'SERVICE_SUPABASEANON_KEY or SUPABASE_ANON_KEY': supabaseKey,
   'VITE_OPENROUTER_API_KEY': process.env.VITE_OPENROUTER_API_KEY,
   'VITE_HUGGINGFACE_API_KEY': process.env.VITE_HUGGINGFACE_API_KEY
@@ -378,13 +393,18 @@ app.post('/api/huggingface/inference', async (req, res) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  const supabaseConfigured = process.env.NODE_ENV === 'production' 
+    ? !!process.env.POSTGRES_PASSWORD 
+    : !!process.env.SUPABASE_URL;
+    
   res.json({ 
     status: 'healthy', 
     timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
     services: {
       openrouter: !!process.env.VITE_OPENROUTER_API_KEY,
       huggingface: !!process.env.VITE_HUGGINGFACE_API_KEY,
-      supabase: !!process.env.SUPABASE_URL
+      supabase: supabaseConfigured
     }
   });
 });
