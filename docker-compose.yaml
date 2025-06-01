@@ -18,7 +18,8 @@ services:
     labels:
       # Caddy Docker Proxy labels for subdomain
       - "caddy=api.bookzify.xyz"
-      - "caddy.reverse_proxy={{upstreams 5005}}"
+      # Use container name for reverse proxy
+      - "caddy.reverse_proxy=api:5005"
       - "caddy.tls.dns=cloudflare"
       # Additional Caddy headers for CORS
       - "caddy.header.add=Access-Control-Allow-Origin \"https://bookzify.xyz, https://www.bookzify.xyz, https://api.bookzify.xyz\""
@@ -27,6 +28,8 @@ services:
       - "caddy.header.add=Access-Control-Allow-Credentials \"true\""
       # Coolify management labels
       - "coolify.managed=true"
+    # Add container name for stable networking
+    container_name: api
 
 networks:
   coolify:
