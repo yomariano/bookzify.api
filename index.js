@@ -17,32 +17,37 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Initialize Supabase client with environment-specific URL
-let supabaseUrl;
-if (process.env.NODE_ENV === 'production') {
-  // For production, use PostgreSQL connection string format
-  const postgresPassword = process.env.POSTGRES_PASSWORD;
-  if (!postgresPassword) {
-    console.error('❌ POSTGRES_PASSWORD is required for production environment');
-    process.exit(1);
-  }
-  supabaseUrl = `postgresql://postgres:${postgresPassword}@supabase-db:5432/postgres`;
-  console.log('🔧 Using PostgreSQL connection string for production');
-} else {
-  // For development, use the standard Supabase URL
-  supabaseUrl = process.env.SUPABASE_URL;
-  console.log('🔧 Using standard Supabase URL for development');
-}
-
+// Initialize Supabase client
+// The Supabase JS client (@supabase/supabase-js) requires the project's HTTP/S URL,
+// not the direct PostgreSQL connection string.
+const supabaseHttpClientUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE_ANON_KEY;
 
 // Validate required environment variables
 const requiredEnvVars = {
-  'SUPABASE_URL or POSTGRES_PASSWORD (for prod)': process.env.NODE_ENV === 'production' ? process.env.POSTGRES_PASSWORD : supabaseUrl,
+  'SUPABASE_URL': supabaseHttpClientUrl, // Essential for the Supabase JS client
   'SERVICE_SUPABASEANON_KEY or SUPABASE_ANON_KEY': supabaseKey,
   'VITE_OPENROUTER_API_KEY': process.env.VITE_OPENROUTER_API_KEY,
   'VITE_HUGGINGFACE_API_KEY': process.env.VITE_HUGGINGFACE_API_KEY
 };
+
+// In production, POSTGRES_PASSWORD is also checked.
+// This password might be used for direct database connections elsewhere,
+// but not for initializing this Supabase JS client instance.
+if (process.env.NODE_ENV === 'production') {
+  console.log(`🔧 Production environment: Using SUPABASE_URL (${supabaseHttpClientUrl || 'NOT SET!'}) for Supabase client.`);
+  if (!process.env.POSTGRES_PASSWORD) {
+    // Add to the list of missing variables to ensure the check fails if it's not set.
+    requiredEnvVars['POSTGRES_PASSWORD (for production)'] = undefined;
+    console.error('❌ POSTGRES_PASSWORD is required for production environment but is not set.');
+  } else {
+    // Log that it's set, and include it in the check for completeness, though it's not used by createClient.
+    requiredEnvVars['POSTGRES_PASSWORD (for production)'] = process.env.POSTGRES_PASSWORD;
+    console.log('🔧 POSTGRES_PASSWORD is set for production.');
+  }
+} else {
+  console.log(`🔧 Development environment: Using SUPABASE_URL (${supabaseHttpClientUrl || 'NOT SET!'}) for Supabase client.`);
+}
 
 const missingEnvVars = Object.entries(requiredEnvVars)
   .filter(([key, value]) => !value)
@@ -53,7 +58,9 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Initialize the Supabase client with the correct HTTP/S URL
+const supabase = createClient(supabaseHttpClientUrl, supabaseKey);
+console.log(`🔧 Supabase client initialized with URL: ${supabaseHttpClientUrl}`);
 
 // Support multiple book sources
 const BOOK_SOURCES = {
