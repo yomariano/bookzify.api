@@ -20,25 +20,14 @@ const __dirname = path.dirname(__filename);
 // Initialize Supabase client with environment-specific URL
 let supabaseUrl;
 if (process.env.NODE_ENV === 'production') {
-  // For production, construct the Supabase REST API URL
-  // The format should be: https://your-project.supabase.co
-  // or in self-hosted cases: http://supabase-kong:8000 or similar
-  
-  // Check if we have a direct SUPABASE_URL for production
-  if (process.env.SUPABASE_URL) {
-    supabaseUrl = process.env.SUPABASE_URL;
-    console.log('🔧 Using SUPABASE_URL for production');
-  } else if (process.env.SUPABASE_REST_URL) {
-    // Alternative environment variable for REST API URL
-    supabaseUrl = process.env.SUPABASE_REST_URL;
-    console.log('🔧 Using SUPABASE_REST_URL for production');
-  } else {
-    // Fallback: construct from known patterns
-    // For self-hosted Supabase, the REST API is typically available at:
-    // http://localhost:8000 or http://supabase-kong:8000
-    supabaseUrl = process.env.SUPABASE_API_URL || 'http://supabase-kong:8000';
-    console.log('🔧 Using fallback Supabase API URL for production:', supabaseUrl);
+  // For production, use PostgreSQL connection string format
+  const postgresPassword = process.env.POSTGRES_PASSWORD;
+  if (!postgresPassword) {
+    console.error('❌ POSTGRES_PASSWORD is required for production environment');
+    process.exit(1);
   }
+  supabaseUrl = `postgresql://postgres:${postgresPassword}@supabase-db:5432/postgres`;
+  console.log('🔧 Using PostgreSQL connection string for production');
 } else {
   // For development, use the standard Supabase URL
   supabaseUrl = process.env.SUPABASE_URL;
@@ -49,7 +38,7 @@ const supabaseKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE
 
 // Validate required environment variables
 const requiredEnvVars = {
-  'SUPABASE_URL or SUPABASE_REST_URL or SUPABASE_API_URL': supabaseUrl,
+  'SUPABASE_URL or POSTGRES_PASSWORD (for prod)': process.env.NODE_ENV === 'production' ? process.env.POSTGRES_PASSWORD : supabaseUrl,
   'SERVICE_SUPABASEANON_KEY or SUPABASE_ANON_KEY': supabaseKey,
   'VITE_OPENROUTER_API_KEY': process.env.VITE_OPENROUTER_API_KEY,
   'VITE_HUGGINGFACE_API_KEY': process.env.VITE_HUGGINGFACE_API_KEY
@@ -404,7 +393,9 @@ app.post('/api/huggingface/inference', async (req, res) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  const supabaseConfigured = !!supabaseUrl && !!supabaseKey;
+  const supabaseConfigured = process.env.NODE_ENV === 'production' 
+    ? !!process.env.POSTGRES_PASSWORD 
+    : !!process.env.SUPABASE_URL;
     
   res.json({ 
     status: 'healthy', 
@@ -414,10 +405,6 @@ app.get('/health', (req, res) => {
       openrouter: !!process.env.VITE_OPENROUTER_API_KEY,
       huggingface: !!process.env.VITE_HUGGINGFACE_API_KEY,
       supabase: supabaseConfigured
-    },
-    supabase: {
-      url: supabaseUrl ? 'configured' : 'missing',
-      key: supabaseKey ? 'configured' : 'missing'
     }
   });
 });
