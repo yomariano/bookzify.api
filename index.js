@@ -164,6 +164,118 @@ try {
   if (process.env.NODE_ENV === 'production') {
     console.log('🔧 Production environment detected - testing connectivity...');
     
+    // IMMEDIATE PostgreSQL FALLBACK: Try direct connection first to bypass network issues
+    if (process.env.POSTGRES_PASSWORD) {
+      console.log('💾 PostgreSQL credentials detected - attempting direct connection as primary method...');
+      
+      try {
+        const postgres = await import('postgres');
+        const pgClient = postgres.default({
+          host: 'supabase-db', 
+          port: 5432,
+          database: 'postgres',
+          username: 'postgres',
+          password: process.env.POSTGRES_PASSWORD,
+          connect_timeout: 5,
+          max: 10
+        });
+        
+        // Test the connection immediately
+        const testResult = await pgClient`SELECT 1 as test`;
+        if (testResult && testResult.length > 0) {
+          console.log('✅ Direct PostgreSQL connection successful! Using as primary database.');
+          
+          // Replace the Supabase client with a simplified PostgreSQL-based one
+          supabase = {
+            from: (table) => ({
+              select: (columns = '*') => ({
+                eq: (column, value) => ({
+                  single: async () => {
+                    try {
+                      // Use template literals for table and column names (unsafe but needed for dynamic queries)
+                      const query = `SELECT ${columns} FROM ${table} WHERE ${column} = $1 LIMIT 1`;
+                      const result = await pgClient.unsafe(query, [value]);
+                      return { data: result[0] || null, error: null };
+                    } catch (error) {
+                      return { data: null, error: { message: error.message, code: 'PG_ERROR' } };
+                    }
+                  }
+                }),
+                limit: (limit) => ({
+                  single: async () => {
+                    try {
+                      const query = `SELECT ${columns} FROM ${table} LIMIT ${limit}`;
+                      const result = await pgClient.unsafe(query);
+                      return { data: result[0] || null, error: null };
+                    } catch (error) {
+                      return { data: null, error: { message: error.message, code: 'PG_ERROR' } };
+                    }
+                  }
+                }),
+                single: async () => {
+                  try {
+                    const query = `SELECT ${columns} FROM ${table} LIMIT 1`;
+                    const result = await pgClient.unsafe(query);
+                    return { data: result[0] || null, error: null };
+                  } catch (error) {
+                    return { data: null, error: { message: error.message, code: 'PG_ERROR' } };
+                  }
+                }
+              }),
+              insert: (records) => ({
+                select: () => ({
+                  single: async () => {
+                    try {
+                      const record = records[0];
+                      const keys = Object.keys(record);
+                      const values = Object.values(record);
+                      const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+                      const query = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders}) RETURNING *`;
+                      const result = await pgClient.unsafe(query, values);
+                      return { data: result[0], error: null };
+                    } catch (error) {
+                      return { data: null, error: { message: error.message, code: 'PG_ERROR' } };
+                    }
+                  }
+                })
+              }),
+              delete: () => ({
+                eq: (column, value) => ({
+                  async then(resolve) {
+                    try {
+                      const query = `DELETE FROM ${table} WHERE ${column} = $1`;
+                      await pgClient.unsafe(query, [value]);
+                      resolve({ error: null });
+                    } catch (error) {
+                      resolve({ error: { message: error.message, code: 'PG_ERROR' } });
+                    }
+                  }
+                })
+              })
+            }),
+            storage: {
+              from: () => ({
+                upload: () => ({ data: null, error: { message: 'Storage not available in PostgreSQL mode - network isolated' } }),
+                remove: () => ({ error: { message: 'Storage not available in PostgreSQL mode' } }),
+                getPublicUrl: () => ({ data: { publicUrl: '' } }),
+                createSignedUrl: () => ({ data: null, error: { message: 'Storage not available in PostgreSQL mode' } })
+              })
+            }
+          };
+          
+          console.log('🔄 Supabase client replaced with PostgreSQL direct connection.');
+          console.log('⚠️ Note: Storage operations disabled due to network isolation, but database queries will function.');
+          
+          // Skip the network test since we're using direct PostgreSQL
+          return;
+        }
+      } catch (pgError) {
+        console.error('❌ Direct PostgreSQL connection failed:', pgError);
+        console.log('🔄 Falling back to network-based Supabase connection...');
+      }
+    }
+    
+    // Original network-based fallback (only if PostgreSQL failed)
     setTimeout(async () => {
       try {
         console.log('🧪 Testing production Supabase connectivity...');
@@ -179,40 +291,24 @@ try {
           
           // Create fallback client with internal networking
           const fallbackClient = createClient(supabaseUrl, supabaseKey, {
-            auth: { persistSession: false },
-            global: {
-              fetch: async (url, options = {}) => {
-                try {
-                  // Try original fetch first
-                  return await fetch(url, { ...options, timeout: 5000 });
-                } catch (networkError) {
-                  console.log('🔄 Primary fetch failed, trying production workarounds...');
-                  
-                  // Fallback 1: Try with different DNS
-                  try {
-                    const modifiedUrl = url.replace('supabasekong-g00sk4cwgwk0cwkc8kcgc8gk.bookzify.xyz', '116.203.117.211');
-                    const response = await fetch(modifiedUrl, { 
-                      ...options, 
-                      timeout: 10000,
-                      headers: {
-                        ...options.headers,
-                        'Host': 'supabasekong-g00sk4cwgwk0cwkc8kcgc8gk.bookzify.xyz'
-                      }
-                    });
-                    console.log('✅ Direct IP fallback successful');
-                    return response;
-                  } catch (ipError) {
-                    console.log('❌ Direct IP fallback failed:', ipError.message);
-                    throw networkError; // Return original error
-                  }
-                }
-              }
-            }
+            auth: { persistSession: false }
+            // Removed complex fallback fetch wrapper - using simpler approach
           });
           
-          // Replace the global supabase client
-          console.log('🔄 Replacing Supabase client with production fallback...');
-          supabase = fallbackClient;
+          // Test if the simplified client works better
+          console.log('🧪 Testing simplified fallback client...');
+          const { data: testData, error: testError } = await fallbackClient
+            .from('books')
+            .select('count')
+            .limit(1)
+            .single();
+          
+          if (!testError || testError.code === 'PGRST116') {
+            console.log('✅ Simplified fallback client works! Replacing global client...');
+            supabase = fallbackClient;
+          } else {
+            console.log('❌ Simplified fallback also failed, keeping original client');
+          }
           
         } else {
           console.log('✅ Production Supabase connectivity working normally');
@@ -223,8 +319,35 @@ try {
         
         // ULTIMATE FALLBACK: Direct PostgreSQL connection if available
         if (process.env.POSTGRES_PASSWORD) {
-          console.log('📋 PostgreSQL credentials detected - could implement direct DB fallback if needed');
+          console.log('🔄 Network connectivity failed. Attempting direct PostgreSQL connection...');
+          console.log('📋 PostgreSQL credentials detected - implementing direct DB fallback');
           console.log('🔗 PostgreSQL available at: postgresql://postgres:***@supabase-db:5432/postgres');
+          
+          try {
+            // Try to create a direct PostgreSQL connection using pg library
+            const { createClient } = await import('postgres');
+            
+            const pgClient = createClient({
+              host: 'supabase-db',
+              port: 5432,
+              database: 'postgres',
+              username: 'postgres',
+              password: process.env.POSTGRES_PASSWORD
+            });
+            
+            // Test the PostgreSQL connection
+            const testResult = await pgClient`SELECT 1 as test`;
+            if (testResult && testResult.length > 0) {
+              console.log('✅ Direct PostgreSQL connection successful!');
+              console.log('🔄 Creating custom Supabase-compatible client...');
+              
+              // Create a custom client that routes through PostgreSQL
+              supabase = createCustomSupabaseClient(pgClient, supabaseKey);
+            }
+          } catch (pgError) {
+            console.error('❌ Direct PostgreSQL connection also failed:', pgError);
+            console.log('🚨 All database connection methods exhausted');
+          }
         }
       }
     }, 2000); // Test after 2 seconds
@@ -2205,3 +2328,285 @@ app.listen(PORT, () => {
   console.log(`🤖 AI API proxies available at http://localhost:${PORT}/api/*`);
   console.log(`🔮 OpenRouter (Google Gemma) available at http://localhost:${PORT}/api/openrouter/chat`);
 }); 
+
+// Custom Supabase client that uses direct PostgreSQL connection
+function createCustomSupabaseClient(pgClient, apiKey) {
+  console.log('🔧 Creating custom PostgreSQL-based Supabase client...');
+  return {
+    from: (table) => ({
+      select: (columns = '*') => ({
+        eq: (column, value) => ({
+          single: async () => {
+            try {
+              const query = `SELECT ${columns} FROM ${table} WHERE ${column} = $1 LIMIT 1`;
+              const result = await pgClient.unsafe(query, [value]);
+              return { data: result[0] || null, error: null };
+            } catch (error) {
+              return { data: null, error: { message: error.message, code: 'CUSTOM_PG_ERROR' } };
+            }
+          }
+        }),
+        limit: (limit) => ({
+          single: async () => {
+            try {
+              const query = `SELECT ${columns} FROM ${table} LIMIT ${limit}`;
+              const result = await pgClient.unsafe(query);
+              return { data: result[0] || null, error: null };
+            } catch (error) {
+              return { data: null, error: { message: error.message, code: 'CUSTOM_PG_ERROR' } };
+            }
+          }
+        }),
+        single: async () => {
+          try {
+            const query = `SELECT ${columns} FROM ${table} LIMIT 1`;
+            const result = await pgClient.unsafe(query);
+            return { data: result[0] || null, error: null };
+          } catch (error) {
+            return { data: null, error: { message: error.message, code: 'CUSTOM_PG_ERROR' } };
+          }
+        }
+      })
+    }),
+    storage: {
+      from: () => ({
+        createSignedUrl: () => ({ data: null, error: { message: 'Storage not available with direct PG connection' } }),
+        upload: () => ({ data: null, error: { message: 'Storage not available with direct PG connection' } }),
+        remove: () => ({ error: { message: 'Storage not available with direct PG connection' } }),
+        getPublicUrl: () => ({ data: { publicUrl: '' } })
+      })
+    }
+  };
+} 
+
+// Network diagnosis endpoint for production troubleshooting
+app.get('/admin/network/detailed-diagnostics', async (req, res) => {
+  try {
+    console.log('🔧 Running detailed network diagnostics...');
+    
+    const diagnostics = {
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development',
+      container_info: {
+        hostname: process.env.HOSTNAME || 'unknown',
+        coolify_url: process.env.COOLIFY_URL || 'not_set',
+        host: process.env.HOST || 'not_set'
+      },
+      dns_tests: {},
+      connectivity_tests: {},
+      supabase_tests: {}
+    };
+    
+    // Test 1: DNS Resolution (multiple methods)
+    const hostname = 'supabasekong-g00sk4cwgwk0cwkc8kcgc8gk.bookzify.xyz';
+    try {
+      const { promisify } = await import('util');
+      const dns = await import('dns');
+      const lookup = promisify(dns.lookup);
+      
+      console.log(`🔍 Testing DNS resolution for: ${hostname}`);
+      const dnsResult = await lookup(hostname);
+      
+      diagnostics.dns_tests.lookup = {
+        status: 'success',
+        hostname,
+        resolved_ip: dnsResult.address,
+        family: dnsResult.family
+      };
+      
+      // Also test direct IP connectivity
+      console.log(`🔍 Testing direct IP connectivity to: ${dnsResult.address}`);
+      const ipTest = await fetch(`https://${dnsResult.address}`, {
+        method: 'HEAD',
+        timeout: 5000,
+        headers: { 'Host': hostname }
+      });
+      
+      diagnostics.connectivity_tests.direct_ip = {
+        status: 'success',
+        ip: dnsResult.address,
+        response_code: ipTest.status
+      };
+      
+    } catch (dnsError) {
+      diagnostics.dns_tests.lookup = {
+        status: 'failed',
+        error: {
+          name: dnsError.name,
+          message: dnsError.message,
+          code: dnsError.code
+        }
+      };
+    }
+    
+    // Test 2: Basic HTTP connectivity with different timeouts
+    const timeouts = [2000, 5000, 10000];
+    for (const timeout of timeouts) {
+      try {
+        console.log(`🌐 Testing HTTP connectivity with ${timeout}ms timeout...`);
+        const response = await fetch(`https://${hostname}`, {
+          method: 'HEAD',
+          timeout
+        });
+        
+        diagnostics.connectivity_tests[`timeout_${timeout}`] = {
+          status: 'success',
+          response_code: response.status,
+          timeout_used: timeout
+        };
+        break; // If one works, we don't need to test longer timeouts
+        
+      } catch (httpError) {
+        diagnostics.connectivity_tests[`timeout_${timeout}`] = {
+          status: 'failed',
+          timeout_used: timeout,
+          error: {
+            name: httpError.name,
+            message: httpError.message,
+            code: httpError.code,
+            cause: httpError.cause?.code || 'unknown'
+          }
+        };
+      }
+    }
+    
+    // Test 3: Supabase API specific tests
+    try {
+      console.log('🔗 Testing Supabase REST API...');
+      const apiUrl = `https://${hostname}/rest/v1/`;
+      
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'apikey': supabaseKey,
+          'Authorization': `Bearer ${supabaseKey}`
+        },
+        timeout: 15000
+      });
+      
+      diagnostics.supabase_tests.rest_api = {
+        status: response.ok ? 'success' : 'failed',
+        url: apiUrl,
+        status_code: response.status,
+        status_text: response.statusText,
+        headers: Object.fromEntries(response.headers.entries())
+      };
+      
+    } catch (supabaseError) {
+      diagnostics.supabase_tests.rest_api = {
+        status: 'failed',
+        error: {
+          name: supabaseError.name,
+          message: supabaseError.message,
+          code: supabaseError.code,
+          cause: supabaseError.cause?.code || 'unknown'
+        }
+      };
+    }
+    
+    // Test 4: PostgreSQL direct connection (if credentials available)
+    if (process.env.POSTGRES_PASSWORD) {
+      try {
+        console.log('💾 Testing direct PostgreSQL connection...');
+        const postgres = await import('postgres');
+        
+        const pgClient = postgres.default({
+          host: 'supabase-db',
+          port: 5432,
+          database: 'postgres',
+          username: 'postgres',
+          password: process.env.POSTGRES_PASSWORD,
+          connect_timeout: 10
+        });
+        
+        const result = await pgClient`SELECT 1 as test`;
+        if (result && result.length > 0) {
+          diagnostics.supabase_tests.postgresql_direct = {
+            status: 'success',
+            connection: 'supabase-db:5432',
+            test_query: 'SELECT 1'
+          };
+        }
+        
+        await pgClient.end();
+        
+      } catch (pgError) {
+        diagnostics.supabase_tests.postgresql_direct = {
+          status: 'failed',
+          error: {
+            name: pgError.name,
+            message: pgError.message,
+            code: pgError.code
+          }
+        };
+      }
+    }
+    
+    // Summary
+    const tests = [
+      ...Object.values(diagnostics.dns_tests),
+      ...Object.values(diagnostics.connectivity_tests),
+      ...Object.values(diagnostics.supabase_tests)
+    ];
+    
+    const passedTests = tests.filter(test => test.status === 'success').length;
+    const totalTests = tests.length;
+    
+    diagnostics.summary = {
+      total_tests: totalTests,
+      passed: passedTests,
+      failed: totalTests - passedTests,
+      overall_status: passedTests > 0 ? (passedTests === totalTests ? 'all_passed' : 'partial') : 'all_failed',
+      recommendations: []
+    };
+    
+    // Add recommendations based on results
+    if (diagnostics.dns_tests.lookup?.status === 'failed') {
+      diagnostics.summary.recommendations.push('DNS resolution failed - check container network configuration');
+    }
+    
+    if (diagnostics.supabase_tests.postgresql_direct?.status === 'success') {
+      diagnostics.summary.recommendations.push('Direct PostgreSQL works - can use as fallback');
+    }
+    
+    if (Object.values(diagnostics.connectivity_tests).every(test => test.status === 'failed')) {
+      diagnostics.summary.recommendations.push('All HTTP connectivity failed - network isolation issue');
+    }
+    
+    console.log(`📊 Detailed diagnostics completed: ${diagnostics.summary.overall_status}`);
+    
+    const statusCode = diagnostics.summary.overall_status === 'all_failed' ? 500 : 200;
+    res.status(statusCode).json(diagnostics);
+    
+  } catch (error) {
+    console.error('❌ Error running detailed diagnostics:', error);
+    res.status(500).json({
+      error: 'Failed to run detailed diagnostics',
+      details: error.message
+    });
+  }
+}); 
+
+// Debug endpoint to show environment variables in production
+app.get('/admin/debug/env', (req, res) => {
+  const debugInfo = {
+    NODE_ENV: process.env.NODE_ENV,
+    POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD ? 'SET' : 'NOT_SET',
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    all_postgres_vars: Object.keys(process.env).filter(key => 
+      key.toLowerCase().includes('postgres') || 
+      key.toLowerCase().includes('pg') ||
+      key.toLowerCase().includes('database') ||
+      key.toLowerCase().includes('db')
+    ).map(key => `${key}=${process.env[key] ? 'SET' : 'NOT_SET'}`),
+    production_check: process.env.NODE_ENV === 'production',
+    container_info: {
+      platform: process.platform,
+      arch: process.arch,
+      node_version: process.version,
+      hostname: process.env.HOSTNAME || 'unknown'
+    }
+  };
+  
+  res.json(debugInfo);
+});
