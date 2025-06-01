@@ -104,6 +104,15 @@ if (process.env.NODE_ENV === 'production') {
 
 const supabaseKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE_ANON_KEY;
 
+// Debug: Compare with frontend key
+const frontendKey = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc0NzUxODI0MCwiZXhwIjo0OTAzMTkxODQwLCJyb2xlIjoic2VydmljZV9yb2xlIn0.-Q1GLX4t6XshgYFIeYfCx5bgNsYVAhu-2CP5VC_RpjM";
+
+console.log('🔑 API Key Comparison:');
+console.log(`🔧 Backend using: ${process.env.SERVICE_SUPABASEANON_KEY ? 'SERVICE_SUPABASEANON_KEY' : 'SUPABASE_ANON_KEY'}`);
+console.log(`🔧 Backend key: ${supabaseKey ? supabaseKey.substring(0, 50) + '...' : 'MISSING'}`);
+console.log(`🖥️ Frontend key: ${frontendKey.substring(0, 50)}...`);
+console.log(`🔍 Keys match: ${supabaseKey === frontendKey ? '✅ YES' : '❌ NO'}`);
+
 // Enhanced environment variable validation
 const requiredEnvVars = {
   'SUPABASE_URL': supabaseUrl,
@@ -135,78 +144,15 @@ try {
   console.log(`🔗 Supabase URL: ${supabaseUrl.replace(/password=[^&]*/g, 'password=***')}`);
   console.log(`🔑 Using ${supabaseKey ? 'valid' : 'missing'} API key`);
   
+  // TEMPORARY: Use same configuration as working frontend
   supabase = createClient(supabaseUrl, supabaseKey, {
     auth: {
       persistSession: false
-    },
-    global: {
-      fetch: async (url, options = {}) => {
-        try {
-          console.log(`🌐 Making request to: ${url}`);
-          console.log(`🔧 Request options:`, {
-            method: options.method || 'GET',
-            headers: Object.keys(options.headers || {}),
-            timeout: options.timeout || 'default'
-          });
-          
-          const response = await fetch(url, {
-            ...options,
-            timeout: 15000 // 15 second timeout
-          });
-          
-          console.log(`📡 Response status: ${response.status} ${response.statusText}`);
-          console.log(`📋 Response headers:`, Object.fromEntries(response.headers.entries()));
-          
-          if (!response.ok) {
-            console.error(`❌ HTTP ${response.status}: ${response.statusText} for ${url}`);
-          }
-          
-          return response;
-        } catch (fetchError) {
-          // Enhanced error capture
-          const errorDetails = {
-            url,
-            error: fetchError.message,
-            name: fetchError.name,
-            code: fetchError.code,
-            errno: fetchError.errno,
-            syscall: fetchError.syscall,
-            hostname: fetchError.hostname,
-            type: fetchError.constructor.name,
-            cause: fetchError.cause
-          };
-          
-          // Try to get more specific error information
-          if (fetchError.cause) {
-            errorDetails.causeDetails = {
-              message: fetchError.cause.message,
-              code: fetchError.cause.code,
-              errno: fetchError.cause.errno,
-              syscall: fetchError.cause.syscall,
-              hostname: fetchError.cause.hostname
-            };
-          }
-          
-          console.error('❌ Enhanced fetch error details:', errorDetails);
-          
-          // Log additional context
-          console.error('🔍 Additional context:', {
-            nodeVersion: process.version,
-            platform: process.platform,
-            arch: process.arch,
-            containerInfo: {
-              hostname: process.env.HOSTNAME,
-              host: process.env.HOST
-            }
-          });
-          
-          throw fetchError;
-        }
-      }
     }
+    // Removed custom fetch wrapper temporarily to match frontend
   });
   
-  console.log('✅ Supabase client created successfully');
+  console.log('✅ Supabase client created successfully (simplified config)');
   
   // Skip validation during initialization, we'll do it manually
   console.log('⚠️ Skipping automatic validation - will test connectivity manually');
