@@ -17,37 +17,68 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Initialize Supabase client
-// The Supabase JS client (@supabase/supabase-js) requires the project's HTTP/S URL,
-// not the direct PostgreSQL connection string.
-const supabaseHttpClientUrl = process.env.SUPABASE_URL;
+// Enhanced Supabase connection validation
+async function validateSupabaseConnection(supabaseClient, connectionString) {
+  try {
+    console.log('🔧 Validating Supabase connection...');
+    console.log(`📍 Connection URL: ${connectionString.replace(/password=[^&]*/g, 'password=***')}`);
+    
+    // Test the connection with a simple query
+    const { data, error } = await supabaseClient
+      .from('books')
+      .select('count')
+      .limit(1)
+      .single();
+    
+    if (error && error.code !== 'PGRST116') { // PGRST116 is "not found" which is acceptable
+      console.error('❌ Supabase connection validation failed:', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code
+      });
+      throw new Error(`Supabase connection failed: ${error.message} (Code: ${error.code})`);
+    }
+    
+    console.log('✅ Supabase connection validated successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ Supabase connection validation error:', {
+      name: error.name,
+      message: error.message,
+      cause: error.cause,
+      stack: error.stack?.split('\n').slice(0, 3).join('\n')
+    });
+    throw error;
+  }
+}
+
+// Initialize Supabase client with environment-specific URL
+let supabaseUrl;
+if (process.env.NODE_ENV === 'production') {
+  // For production, use PostgreSQL connection string format
+  const postgresPassword = process.env.POSTGRES_PASSWORD;
+  if (!postgresPassword) {
+    console.error('❌ POSTGRES_PASSWORD is required for production environment');
+    process.exit(1);
+  }
+  supabaseUrl = `postgresql://postgres:${postgresPassword}@supabase-db:5432/postgres`;
+  console.log('🔧 Using PostgreSQL connection string for production');
+} else {
+  // For development, use the standard Supabase URL
+  supabaseUrl = process.env.SUPABASE_URL;
+  console.log('🔧 Using standard Supabase URL for development');
+}
+
 const supabaseKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE_ANON_KEY;
 
-// Validate required environment variables
+// Enhanced environment variable validation
 const requiredEnvVars = {
-  'SUPABASE_URL': supabaseHttpClientUrl, // Essential for the Supabase JS client
+  'SUPABASE_URL or POSTGRES_PASSWORD (for prod)': process.env.NODE_ENV === 'production' ? process.env.POSTGRES_PASSWORD : supabaseUrl,
   'SERVICE_SUPABASEANON_KEY or SUPABASE_ANON_KEY': supabaseKey,
   'VITE_OPENROUTER_API_KEY': process.env.VITE_OPENROUTER_API_KEY,
   'VITE_HUGGINGFACE_API_KEY': process.env.VITE_HUGGINGFACE_API_KEY
 };
-
-// In production, POSTGRES_PASSWORD is also checked.
-// This password might be used for direct database connections elsewhere,
-// but not for initializing this Supabase JS client instance.
-if (process.env.NODE_ENV === 'production') {
-  console.log(`🔧 Production environment: Using SUPABASE_URL (${supabaseHttpClientUrl || 'NOT SET!'}) for Supabase client.`);
-  if (!process.env.POSTGRES_PASSWORD) {
-    // Add to the list of missing variables to ensure the check fails if it's not set.
-    requiredEnvVars['POSTGRES_PASSWORD (for production)'] = undefined;
-    console.error('❌ POSTGRES_PASSWORD is required for production environment but is not set.');
-  } else {
-    // Log that it's set, and include it in the check for completeness, though it's not used by createClient.
-    requiredEnvVars['POSTGRES_PASSWORD (for production)'] = process.env.POSTGRES_PASSWORD;
-    console.log('🔧 POSTGRES_PASSWORD is set for production.');
-  }
-} else {
-  console.log(`🔧 Development environment: Using SUPABASE_URL (${supabaseHttpClientUrl || 'NOT SET!'}) for Supabase client.`);
-}
 
 const missingEnvVars = Object.entries(requiredEnvVars)
   .filter(([key, value]) => !value)
@@ -58,9 +89,61 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
-// Initialize the Supabase client with the correct HTTP/S URL
-const supabase = createClient(supabaseHttpClientUrl, supabaseKey);
-console.log(`🔧 Supabase client initialized with URL: ${supabaseHttpClientUrl}`);
+// Enhanced Supabase client initialization with better error handling
+let supabase;
+try {
+  console.log('🔧 Initializing Supabase client...');
+  console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔗 Supabase URL: ${supabaseUrl.replace(/password=[^&]*/g, 'password=***')}`);
+  console.log(`🔑 Using ${supabaseKey ? 'valid' : 'missing'} API key`);
+  
+  supabase = createClient(supabaseUrl, supabaseKey, {
+    auth: {
+      persistSession: false
+    },
+    global: {
+      fetch: async (url, options = {}) => {
+        try {
+          console.log(`🌐 Making request to: ${url}`);
+          const response = await fetch(url, {
+            ...options,
+            timeout: 10000 // 10 second timeout
+          });
+          
+          if (!response.ok) {
+            console.error(`❌ HTTP ${response.status}: ${response.statusText} for ${url}`);
+          }
+          
+          return response;
+        } catch (fetchError) {
+          console.error('❌ Fetch error details:', {
+            url,
+            error: fetchError.message,
+            code: fetchError.code,
+            errno: fetchError.errno,
+            syscall: fetchError.syscall,
+            hostname: fetchError.hostname
+          });
+          throw fetchError;
+        }
+      }
+    }
+  });
+  
+  console.log('✅ Supabase client created successfully');
+  
+  // Validate the connection
+  await validateSupabaseConnection(supabase, supabaseUrl);
+  
+} catch (error) {
+  console.error('❌ Failed to initialize Supabase client:', {
+    name: error.name,
+    message: error.message,
+    cause: error.cause,
+    stack: error.stack?.split('\n').slice(0, 5).join('\n')
+  });
+  process.exit(1);
+}
 
 // Support multiple book sources
 const BOOK_SOURCES = {
@@ -196,10 +279,15 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
   }
 }
 
-// Helper function to check if book already exists
+// Enhanced helper function to check if book already exists
 async function checkBookExists(downloadUrl) {
   try {
     console.log(`🔍 Checking database for book with download_url: ${downloadUrl}`);
+    
+    // Add connection health check before query
+    if (!supabase) {
+      throw new Error('Supabase client not initialized');
+    }
     
     const { data, error } = await supabase
       .from('books')
@@ -208,7 +296,13 @@ async function checkBookExists(downloadUrl) {
       .single();
 
     if (error && error.code !== 'PGRST116') { // PGRST116 is "not found" error
-      console.error('❌ Error checking book existence:', error);
+      console.error('❌ Database query error:', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+        query: 'books table with download_url filter'
+      });
       throw error;
     }
 
@@ -247,7 +341,25 @@ async function checkBookExists(downloadUrl) {
 
     return data; // Returns null if not found, or book data if found
   } catch (error) {
-    console.error('❌ Error in checkBookExists:', error);
+    console.error('❌ Enhanced error details for checkBookExists:', {
+      name: error.name,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code,
+      cause: error.cause,
+      errno: error.errno,
+      syscall: error.syscall,
+      hostname: error.hostname,
+      stack: error.stack?.split('\n').slice(0, 5).join('\n'),
+      downloadUrl,
+      supabaseClientExists: !!supabase,
+      networkInfo: {
+        nodeVersion: process.version,
+        platform: process.platform,
+        arch: process.arch
+      }
+    });
     throw error;
   }
 }
@@ -399,21 +511,268 @@ app.post('/api/huggingface/inference', async (req, res) => {
 });
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
   const supabaseConfigured = process.env.NODE_ENV === 'production' 
     ? !!process.env.POSTGRES_PASSWORD 
     : !!process.env.SUPABASE_URL;
+  
+  // Test database connectivity
+  let databaseStatus = 'unknown';
+  let databaseError = null;
+  
+  try {
+    if (supabase) {
+      console.log('🩺 Health check: Testing database connectivity...');
+      const { data, error } = await supabase
+        .from('books')
+        .select('count')
+        .limit(1)
+        .single();
+      
+      if (error && error.code !== 'PGRST116') {
+        databaseStatus = 'error';
+        databaseError = {
+          message: error.message,
+          code: error.code,
+          details: error.details
+        };
+        console.error('❌ Health check: Database connectivity failed:', databaseError);
+      } else {
+        databaseStatus = 'connected';
+        console.log('✅ Health check: Database connectivity successful');
+      }
+    } else {
+      databaseStatus = 'not_initialized';
+      databaseError = 'Supabase client not initialized';
+    }
+  } catch (healthError) {
+    databaseStatus = 'error';
+    databaseError = {
+      name: healthError.name,
+      message: healthError.message,
+      errno: healthError.errno,
+      syscall: healthError.syscall,
+      hostname: healthError.hostname
+    };
+    console.error('❌ Health check: Database test failed:', databaseError);
+  }
     
-  res.json({ 
-    status: 'healthy', 
+  const healthData = { 
+    status: databaseStatus === 'connected' ? 'healthy' : 'degraded', 
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
+    database: {
+      status: databaseStatus,
+      error: databaseError,
+      url: supabaseUrl ? supabaseUrl.replace(/password=[^&]*/g, 'password=***') : 'not_set'
+    },
     services: {
       openrouter: !!process.env.VITE_OPENROUTER_API_KEY,
       huggingface: !!process.env.VITE_HUGGINGFACE_API_KEY,
       supabase: supabaseConfigured
+    },
+    system: {
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      memory: {
+        used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
+        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB'
+      },
+      uptime: Math.round(process.uptime()) + ' seconds'
     }
-  });
+  };
+  
+  const statusCode = databaseStatus === 'connected' ? 200 : 503;
+  res.status(statusCode).json(healthData);
+});
+
+// Network diagnostics endpoint
+app.get('/admin/network/diagnostics', async (req, res) => {
+  try {
+    console.log('🔧 Running network diagnostics...');
+    
+    const diagnostics = {
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development',
+      tests: {}
+    };
+    
+    // Test 1: DNS Resolution
+    try {
+      const { promisify } = await import('util');
+      const dns = await import('dns');
+      const lookup = promisify(dns.lookup);
+      
+      // Extract hostname from Supabase URL
+      const urlObj = new URL(supabaseUrl);
+      const hostname = urlObj.hostname;
+      
+      console.log(`🔍 Testing DNS resolution for: ${hostname}`);
+      const dnsResult = await lookup(hostname);
+      
+      diagnostics.tests.dns = {
+        status: 'success',
+        hostname,
+        resolved_ip: dnsResult.address,
+        family: dnsResult.family
+      };
+      console.log(`✅ DNS resolved: ${hostname} -> ${dnsResult.address}`);
+    } catch (dnsError) {
+      diagnostics.tests.dns = {
+        status: 'failed',
+        error: {
+          name: dnsError.name,
+          message: dnsError.message,
+          code: dnsError.code,
+          errno: dnsError.errno,
+          syscall: dnsError.syscall
+        }
+      };
+      console.error('❌ DNS resolution failed:', dnsError);
+    }
+    
+    // Test 2: Basic HTTP connectivity
+    try {
+      console.log('🌐 Testing basic HTTP connectivity...');
+      const testUrl = new URL(supabaseUrl);
+      const baseUrl = `${testUrl.protocol}//${testUrl.host}`;
+      
+      const response = await fetch(baseUrl, {
+        method: 'HEAD',
+        timeout: 10000
+      });
+      
+      diagnostics.tests.http = {
+        status: 'success',
+        url: baseUrl,
+        status_code: response.status,
+        headers: Object.fromEntries(response.headers.entries())
+      };
+      console.log(`✅ HTTP connectivity successful: ${response.status}`);
+    } catch (httpError) {
+      diagnostics.tests.http = {
+        status: 'failed',
+        error: {
+          name: httpError.name,
+          message: httpError.message,
+          cause: httpError.cause,
+          errno: httpError.errno,
+          syscall: httpError.syscall,
+          hostname: httpError.hostname
+        }
+      };
+      console.error('❌ HTTP connectivity failed:', httpError);
+    }
+    
+    // Test 3: Supabase API endpoint
+    try {
+      console.log('🔗 Testing Supabase API endpoint...');
+      const apiUrl = `${supabaseUrl}/rest/v1/`;
+      
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'apikey': supabaseKey,
+          'Authorization': `Bearer ${supabaseKey}`
+        },
+        timeout: 10000
+      });
+      
+      diagnostics.tests.supabase_api = {
+        status: response.ok ? 'success' : 'failed',
+        url: apiUrl.replace(/password=[^&]*/g, 'password=***'),
+        status_code: response.status,
+        status_text: response.statusText
+      };
+      
+      if (response.ok) {
+        console.log(`✅ Supabase API accessible: ${response.status}`);
+      } else {
+        console.error(`❌ Supabase API error: ${response.status} ${response.statusText}`);
+      }
+    } catch (supabaseError) {
+      diagnostics.tests.supabase_api = {
+        status: 'failed',
+        error: {
+          name: supabaseError.name,
+          message: supabaseError.message,
+          errno: supabaseError.errno,
+          syscall: supabaseError.syscall,
+          hostname: supabaseError.hostname
+        }
+      };
+      console.error('❌ Supabase API test failed:', supabaseError);
+    }
+    
+    // Test 4: Database query
+    try {
+      console.log('💾 Testing database query...');
+      const { data, error } = await supabase
+        .from('books')
+        .select('count')
+        .limit(1)
+        .single();
+      
+      if (error && error.code !== 'PGRST116') {
+        diagnostics.tests.database = {
+          status: 'failed',
+          error: {
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+            code: error.code
+          }
+        };
+        console.error('❌ Database query failed:', error);
+      } else {
+        diagnostics.tests.database = {
+          status: 'success',
+          message: 'Database query successful'
+        };
+        console.log('✅ Database query successful');
+      }
+    } catch (dbError) {
+      diagnostics.tests.database = {
+        status: 'failed',
+        error: {
+          name: dbError.name,
+          message: dbError.message,
+          errno: dbError.errno,
+          syscall: dbError.syscall,
+          hostname: dbError.hostname
+        }
+      };
+      console.error('❌ Database query test failed:', dbError);
+    }
+    
+    // Determine overall status
+    const testResults = Object.values(diagnostics.tests);
+    const failedTests = testResults.filter(test => test.status === 'failed');
+    const overallStatus = failedTests.length === 0 ? 'all_passed' : 
+                         failedTests.length === testResults.length ? 'all_failed' : 'partial_failure';
+    
+    diagnostics.summary = {
+      overall_status: overallStatus,
+      total_tests: testResults.length,
+      passed: testResults.length - failedTests.length,
+      failed: failedTests.length
+    };
+    
+    console.log(`📊 Network diagnostics completed: ${overallStatus}`);
+    
+    const statusCode = overallStatus === 'all_passed' ? 200 : 
+                      overallStatus === 'partial_failure' ? 207 : 500;
+    
+    res.status(statusCode).json(diagnostics);
+    
+  } catch (error) {
+    console.error('❌ Error running network diagnostics:', error);
+    res.status(500).json({
+      error: 'Failed to run network diagnostics',
+      details: error.message
+    });
+  }
 });
 
 // Book content proxy endpoint
@@ -670,15 +1029,16 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       // Book-related endpoints
-      'GET /health': 'Health check with service status',
+      'GET /health': 'Enhanced health check with database connectivity test',
       'GET /books/search?query=<term>&page=<num>&limit=<num>&source=<source>': 'Search books from multiple sources',
       'POST /books/download': 'Download a book (requires url, title, author, format, category in body)',
       'POST /api/proxy/book-content': 'Proxy book content to resolve CORS issues (requires url and optional format in body)',
       'GET /books/:id': 'Get book details (not implemented)',
       'GET /test-download': 'Test download functionality',
       
-      // Admin endpoints
+      // Admin and diagnostic endpoints
       'GET /admin/database/diagnostics': 'Run database diagnostics to identify corrupted records',
+      'GET /admin/network/diagnostics': 'Run comprehensive network and connectivity diagnostics',
       'DELETE /admin/database/cleanup/:bookId?confirm=true': 'Delete a corrupted book record and its S3 file',
       
       // AI API proxies
@@ -694,12 +1054,19 @@ app.get('/', (req, res) => {
       'Search Anna\'s Archive': '/books/search?query=javascript&source=annas-archive',
       'Search default (ebook-hunter)': '/books/search?query=javascript',
       'Proxy book content': 'POST /api/proxy/book-content with { "url": "https://example.com/book.pdf", "format": "pdf" }',
+      'Health check': 'GET /health',
       'Database diagnostics': 'GET /admin/database/diagnostics',
+      'Network diagnostics': 'GET /admin/network/diagnostics',
       'Delete corrupted book': 'DELETE /admin/database/cleanup/book-id-here?confirm=true',
       'OpenRouter Chat': 'POST /api/openrouter/chat with standard OpenRouter chat completion payload',
       'Hugging Face': 'POST /api/huggingface/inference with model name and inference payload'
     },
-    cors: 'Enabled for localhost development'
+    cors: 'Enabled for localhost development',
+    diagnostics: {
+      description: 'Enhanced error reporting and diagnostics available',
+      healthCheck: 'Includes database connectivity test',
+      networkDiagnostics: 'DNS resolution, HTTP connectivity, Supabase API, and database query tests'
+    }
   });
 });
 
