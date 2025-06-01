@@ -654,9 +654,10 @@ const PORT = process.env.PORT || 5005;
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
     ? [
-        // Add your production domain here
+        // Production domains
         'https://bookzify.xyz',
-        'https://www.bookzify.xyz'
+        'https://www.bookzify.xyz',
+        'https://api.bookzify.xyz'
       ]
     : [
         // Development origins
@@ -680,24 +681,36 @@ const corsOptions = {
     'Authorization', 
     'X-Requested-With',
     'Accept',
-    'Origin'
-  ]
+    'Origin',
+    'Access-Control-Allow-Origin'
+  ],
+  exposedHeaders: ['Access-Control-Allow-Origin']
 };
 
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// CORS debugging middleware (only in development)
-if (process.env.NODE_ENV !== 'production') {
-  app.use((req, res, next) => {
-    const origin = req.get('Origin');
-    if (origin) {
-      console.log(`🌐 CORS: Request from origin: ${origin}`);
-    }
-    next();
-  });
-}
+// CORS debugging middleware
+app.use((req, res, next) => {
+  const origin = req.get('Origin');
+  const host = req.get('Host');
+  
+  console.log(`🌐 CORS Debug:
+    Origin: ${origin || 'not set'}
+    Host: ${host || 'not set'}
+    Method: ${req.method}
+    Path: ${req.path}
+    Environment: ${process.env.NODE_ENV}
+  `);
+  
+  if (origin) {
+    const isAllowed = corsOptions.origin.includes(origin) || 
+      (typeof corsOptions.origin[0] === 'object' && corsOptions.origin.some(pattern => pattern.test(origin)));
+    console.log(`🔒 CORS: ${isAllowed ? 'Allowed' : 'Blocked'} request from origin: ${origin}`);
+  }
+  next();
+});
 
 // OpenRouter API proxy
 app.post('/api/openrouter/chat', async (req, res) => {
