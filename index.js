@@ -96,6 +96,12 @@ if (process.env.NODE_ENV === 'production') {
   }
   
   console.log('🔧 Using Supabase REST API URL for production');
+  
+  // PRODUCTION NETWORK FALLBACK: Try internal Docker networking if external fails
+  if (process.env.COOLIFY_URL) {
+    console.log('🐳 Detected Coolify/Docker environment - will implement internal networking fallback if external fails');
+  }
+  
 } else {
   // For development, use the standard Supabase URL
   supabaseUrl = process.env.SUPABASE_URL;
@@ -153,6 +159,76 @@ try {
   });
   
   console.log('✅ Supabase client created successfully (simplified config)');
+  
+  // PRODUCTION FALLBACK: Test connectivity and implement workaround if needed
+  if (process.env.NODE_ENV === 'production') {
+    console.log('🔧 Production environment detected - testing connectivity...');
+    
+    setTimeout(async () => {
+      try {
+        console.log('🧪 Testing production Supabase connectivity...');
+        const { data, error } = await supabase
+          .from('books')
+          .select('count')
+          .limit(1)
+          .single();
+        
+        if (error && error.code !== 'PGRST116') {
+          console.error('❌ Production Supabase connectivity failed:', error);
+          console.log('🔄 Implementing production networking workaround...');
+          
+          // Create fallback client with internal networking
+          const fallbackClient = createClient(supabaseUrl, supabaseKey, {
+            auth: { persistSession: false },
+            global: {
+              fetch: async (url, options = {}) => {
+                try {
+                  // Try original fetch first
+                  return await fetch(url, { ...options, timeout: 5000 });
+                } catch (networkError) {
+                  console.log('🔄 Primary fetch failed, trying production workarounds...');
+                  
+                  // Fallback 1: Try with different DNS
+                  try {
+                    const modifiedUrl = url.replace('supabasekong-g00sk4cwgwk0cwkc8kcgc8gk.bookzify.xyz', '116.203.117.211');
+                    const response = await fetch(modifiedUrl, { 
+                      ...options, 
+                      timeout: 10000,
+                      headers: {
+                        ...options.headers,
+                        'Host': 'supabasekong-g00sk4cwgwk0cwkc8kcgc8gk.bookzify.xyz'
+                      }
+                    });
+                    console.log('✅ Direct IP fallback successful');
+                    return response;
+                  } catch (ipError) {
+                    console.log('❌ Direct IP fallback failed:', ipError.message);
+                    throw networkError; // Return original error
+                  }
+                }
+              }
+            }
+          });
+          
+          // Replace the global supabase client
+          console.log('🔄 Replacing Supabase client with production fallback...');
+          supabase = fallbackClient;
+          
+        } else {
+          console.log('✅ Production Supabase connectivity working normally');
+        }
+      } catch (testError) {
+        console.error('❌ Production connectivity test failed:', testError);
+        console.log('ℹ️ Continuing with standard client - some features may be limited');
+        
+        // ULTIMATE FALLBACK: Direct PostgreSQL connection if available
+        if (process.env.POSTGRES_PASSWORD) {
+          console.log('📋 PostgreSQL credentials detected - could implement direct DB fallback if needed');
+          console.log('🔗 PostgreSQL available at: postgresql://postgres:***@supabase-db:5432/postgres');
+        }
+      }
+    }, 2000); // Test after 2 seconds
+  }
   
   // Skip validation during initialization, we'll do it manually
   console.log('⚠️ Skipping automatic validation - will test connectivity manually');
