@@ -21,7 +21,7 @@ const __dirname = path.dirname(__filename);
 let supabaseUrl;
 if (process.env.NODE_ENV === 'production') {
   // For production, use PostgreSQL connection string format
-  const postgresPassword = process.env.SERVICE_PASSWORD_POSTGRES;
+  const postgresPassword = process.env.POSTGRES_PASSWORD;
   if (!postgresPassword) {
     console.error('❌ POSTGRES_PASSWORD is required for production environment');
     process.exit(1);
