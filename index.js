@@ -17,14 +17,15 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Initialize Supabase client
+// Initialize Supabase clients - separate for different purposes
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE_ANON_KEY;
+const supabaseAnonKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE_ANON_KEY;
+const supabaseServiceKey = process.env.SERVICE_SUPABASESERVICE_KEY || process.env.SUPABASE_SERVICE_KEY;
 
 // Validate required environment variables
 const requiredEnvVars = {
   'SUPABASE_URL': supabaseUrl,
-  'SERVICE_SUPABASEANON_KEY or SUPABASE_ANON_KEY': supabaseKey,
+  'SERVICE_SUPABASEANON_KEY or SUPABASE_ANON_KEY': supabaseAnonKey,
   'VITE_OPENROUTER_API_KEY': process.env.VITE_OPENROUTER_API_KEY,
   'VITE_HUGGINGFACE_API_KEY': process.env.VITE_HUGGINGFACE_API_KEY
 };
@@ -38,7 +39,25 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Create two Supabase clients:
+// 1. For client-side operations (with anon key)
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// 2. For backend operations (with service key to bypass RLS)
+const supabaseAdmin = supabaseServiceKey 
+  ? createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    })
+  : supabase; // Fallback to anon client if no service key
+
+console.log('🔧 Supabase clients initialized:', {
+  hasAnonKey: !!supabaseAnonKey,
+  hasServiceKey: !!supabaseServiceKey,
+  usingAdminClient: !!supabaseServiceKey
+});
 
 // Support multiple book sources
 const BOOK_SOURCES = {
@@ -98,8 +117,8 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
     const contentType = getContentType(sanitizedFileName);
     console.log(`📄 Content type: ${contentType}`);
     
-    // Upload to Supabase storage bucket 'books'
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    // Upload to Supabase storage bucket 'books' using admin client
+    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
       .from('books')
       .upload(uniqueFileName, fileBuffer, {
         contentType: contentType,
@@ -114,14 +133,14 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
     console.log('✅ File uploaded to storage:', uploadData.path);
 
     // Get the public URL for the uploaded file
-    const { data: urlData } = supabase.storage
+    const { data: urlData } = supabaseAdmin.storage
       .from('books')
       .getPublicUrl(uploadData.path);
 
     const s3BucketUrl = urlData.publicUrl;
     console.log('🔗 Public URL generated:', s3BucketUrl);
 
-    // Insert book record into the database
+    // Insert book record into the database using admin client to bypass RLS
     const bookRecord = {
       id: crypto.randomUUID(),
       title: bookMetadata.title || 'Unknown Title',
@@ -141,8 +160,8 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
       updated_at: new Date().toISOString()
     };
 
-    console.log('💾 Inserting book record into database...');
-    const { data: insertData, error: insertError } = await supabase
+    console.log('💾 Inserting book record into database using admin client...');
+    const { data: insertData, error: insertError } = await supabaseAdmin
       .from('books')
       .insert([bookRecord])
       .select()
@@ -152,7 +171,7 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
       console.error('❌ Database insert error:', insertError);
       // If database insert fails, try to clean up the uploaded file
       try {
-        await supabase.storage.from('books').remove([uploadData.path]);
+        await supabaseAdmin.storage.from('books').remove([uploadData.path]);
         console.log('🧹 Cleaned up uploaded file after database error');
       } catch (cleanupError) {
         console.error('❌ Failed to cleanup uploaded file:', cleanupError);
@@ -177,7 +196,7 @@ async function uploadToSupabaseStorage(filePath, fileName, bookMetadata) {
 // Helper function to check if book already exists
 async function checkBookExists(downloadUrl) {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('books')
       .select('id, s3_bucket_url')
       .eq('download_url', downloadUrl)
@@ -505,8 +524,8 @@ async function handleSupabaseUrl(url) {
       const storageApiUrl = `${urlObj.protocol}//${urlObj.host}/storage/v1/object/${bucketName}/${filePath}`;
       console.log(`[BookProxy] Method 1: Using direct storage API: ${storageApiUrl}`);
       
-      const serviceKey = process.env.SERVICE_SUPABASESERVICE_KEY;
-      const anonKey = process.env.SERVICE_SUPABASEANON_KEY;
+      const serviceKey = supabaseServiceKey;
+      const anonKey = supabaseAnonKey;
       
       if (!serviceKey && !anonKey) {
         throw new Error('No Supabase keys found');
@@ -538,10 +557,10 @@ async function handleSupabaseUrl(url) {
     } catch (directApiError) {
       console.log(`[BookProxy] Method 1 failed: ${directApiError.message}`);
       
-      // Method 2: Try Supabase client as fallback
+      // Method 2: Try Supabase admin client as fallback
       try {
-        console.log(`[BookProxy] Method 2: Using Supabase client fallback`);
-        const { data, error } = await supabase.storage
+        console.log(`[BookProxy] Method 2: Using Supabase admin client fallback`);
+        const { data, error } = await supabaseAdmin.storage
           .from(bucketName)
           .createSignedUrl(filePath, 300); // 5 minutes expiry
         
@@ -762,7 +781,7 @@ app.get('/books/search', async (req, res) => {
       // Launch browser with specific options
       console.log('🌐 Launching browser...');
       browser = await chromium.launch({
-        headless: true, // Changed from false to true for production
+        headless: false, // Changed from false to true for production
         args: ['--no-sandbox', '--disable-setuid-sandbox']
       });
       
@@ -1205,7 +1224,7 @@ app.post('/books/download', async (req, res) => {
 
       // Launch browser with headless=false like Python (change to true for production)
       browser = await chromium.launch({
-        headless: true, // Changed from false to true for production
+        headless: false, // Changed from false to true for production
         args: ['--no-sandbox', '--disable-setuid-sandbox']
       });
 
