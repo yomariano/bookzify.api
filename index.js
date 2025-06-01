@@ -143,10 +143,19 @@ try {
       fetch: async (url, options = {}) => {
         try {
           console.log(`🌐 Making request to: ${url}`);
+          console.log(`🔧 Request options:`, {
+            method: options.method || 'GET',
+            headers: Object.keys(options.headers || {}),
+            timeout: options.timeout || 'default'
+          });
+          
           const response = await fetch(url, {
             ...options,
-            timeout: 10000 // 10 second timeout
+            timeout: 15000 // 15 second timeout
           });
+          
+          console.log(`📡 Response status: ${response.status} ${response.statusText}`);
+          console.log(`📋 Response headers:`, Object.fromEntries(response.headers.entries()));
           
           if (!response.ok) {
             console.error(`❌ HTTP ${response.status}: ${response.statusText} for ${url}`);
@@ -154,14 +163,43 @@ try {
           
           return response;
         } catch (fetchError) {
-          console.error('❌ Fetch error details:', {
+          // Enhanced error capture
+          const errorDetails = {
             url,
             error: fetchError.message,
+            name: fetchError.name,
             code: fetchError.code,
             errno: fetchError.errno,
             syscall: fetchError.syscall,
-            hostname: fetchError.hostname
+            hostname: fetchError.hostname,
+            type: fetchError.constructor.name,
+            cause: fetchError.cause
+          };
+          
+          // Try to get more specific error information
+          if (fetchError.cause) {
+            errorDetails.causeDetails = {
+              message: fetchError.cause.message,
+              code: fetchError.cause.code,
+              errno: fetchError.cause.errno,
+              syscall: fetchError.cause.syscall,
+              hostname: fetchError.cause.hostname
+            };
+          }
+          
+          console.error('❌ Enhanced fetch error details:', errorDetails);
+          
+          // Log additional context
+          console.error('🔍 Additional context:', {
+            nodeVersion: process.version,
+            platform: process.platform,
+            arch: process.arch,
+            containerInfo: {
+              hostname: process.env.HOSTNAME,
+              host: process.env.HOST
+            }
           });
+          
           throw fetchError;
         }
       }
@@ -170,8 +208,8 @@ try {
   
   console.log('✅ Supabase client created successfully');
   
-  // Validate the connection
-  await validateSupabaseConnection(supabase, supabaseUrl);
+  // Skip validation during initialization, we'll do it manually
+  console.log('⚠️ Skipping automatic validation - will test connectivity manually');
   
 } catch (error) {
   console.error('❌ Failed to initialize Supabase client:', {
@@ -182,6 +220,70 @@ try {
   });
   process.exit(1);
 }
+
+// Manual connectivity test with more detailed diagnostics
+console.log('🧪 Running manual connectivity test...');
+setTimeout(async () => {
+  try {
+    console.log('🔍 Testing basic HTTP connectivity to Supabase URL...');
+    
+    // Test 1: Basic domain resolution and HTTP connectivity
+    const testUrl = new URL(supabaseUrl);
+    const baseUrl = `${testUrl.protocol}//${testUrl.host}`;
+    
+    console.log(`🌐 Testing base URL: ${baseUrl}`);
+    const response = await fetch(baseUrl, {
+      method: 'HEAD',
+      timeout: 10000
+    });
+    
+    console.log(`✅ Base URL accessible: ${response.status} ${response.statusText}`);
+    
+    // Test 2: Supabase REST API endpoint
+    const restUrl = `${supabaseUrl}/rest/v1/`;
+    console.log(`🔗 Testing REST API: ${restUrl}`);
+    
+    const restResponse = await fetch(restUrl, {
+      method: 'GET',
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`
+      },
+      timeout: 10000
+    });
+    
+    console.log(`✅ REST API accessible: ${restResponse.status} ${restResponse.statusText}`);
+    
+    // Test 3: Try a simple query
+    console.log(`💾 Testing database query...`);
+    const { data, error } = await supabase
+      .from('books')
+      .select('count')
+      .limit(1)
+      .single();
+    
+    if (error && error.code !== 'PGRST116') {
+      console.error('❌ Database query failed:', error);
+    } else {
+      console.log('✅ Database query successful');
+    }
+    
+    console.log('🚀 All connectivity tests completed - starting server...');
+    
+  } catch (testError) {
+    console.error('❌ Connectivity test failed:', {
+      name: testError.name,
+      message: testError.message,
+      code: testError.code,
+      errno: testError.errno,
+      syscall: testError.syscall,
+      hostname: testError.hostname,
+      cause: testError.cause
+    });
+    
+    console.log('⚠️ Starting server anyway - connectivity issues may affect functionality');
+  }
+}, 1000);
 
 // Support multiple book sources
 const BOOK_SOURCES = {
