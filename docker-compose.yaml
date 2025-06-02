@@ -12,7 +12,6 @@ services:
       - CORS_ALLOWED_ORIGINS=https://bookzify.xyz,https://www.bookzify.xyz,https://api.bookzify.xyz
     networks:
       - coolify
-      - supabase
     expose:
       - "5005"  # Only expose to other containers, not to host
     labels:
@@ -40,6 +39,4 @@ services:
 
 networks:
   coolify:
-    external: true
-  supabase:
     external: true 
