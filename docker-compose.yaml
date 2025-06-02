@@ -18,7 +18,7 @@ services:
     labels:
       # Caddy Docker Proxy labels for subdomain
       - "caddy=api.bookzify.xyz"
-      - "caddy.reverse_proxy=http://10.0.1.2:5005"  # Use the container's IP directly
+      - "caddy.reverse_proxy={{upstreams 5005}}"  # Use dynamic service discovery
       - "caddy.reverse_proxy.health_uri=/health"
       - "caddy.reverse_proxy.health_interval=5s"
       - "caddy.reverse_proxy.health_timeout=2s"
@@ -30,17 +30,14 @@ services:
       - "caddy.header.Access-Control-Allow-Credentials=true"
       - "caddy.header.Access-Control-Max-Age=3600"
       - "caddy.header.Vary=Origin"
-      # Additional debug headers
-      - "caddy.header.X-Debug-Container=api-u8s8oswsw84cscwggwgkokk8-234555501149"
-      - "caddy.header.X-Debug-Network=coolify"
       # Coolify management labels
       - "coolify.managed=true"
-    container_name: api-u8s8oswsw84cscwggwgkokk8-234555501149  # Match the actual container name
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5005/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5005/"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 10s
 
 networks:
   coolify:

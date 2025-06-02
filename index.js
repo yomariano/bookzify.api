@@ -825,15 +825,23 @@ app.get('/health', async (req, res) => {
   try {
     if (supabase) {
       console.log('🩺 Health check: Testing database connectivity...');
-      // Use a simple SELECT 1 query instead of accessing tables
-      const testResult = await pgClient`SELECT 1 as test`;
+      const { data, error } = await supabase
+        .from('books')
+        .select('id')
+        .limit(1)
+        .single();
       
-      if (testResult && testResult.length > 0) {
+      if (error && error.code !== 'PGRST116') {
+        databaseStatus = 'error';
+        databaseError = {
+          message: error.message,
+          code: error.code,
+          details: error.details
+        };
+        console.error('❌ Health check: Database connectivity failed:', databaseError);
+      } else {
         databaseStatus = 'connected';
         console.log('✅ Health check: Database connectivity successful');
-      } else {
-        databaseStatus = 'error';
-        databaseError = 'No result from test query';
       }
     } else {
       databaseStatus = 'not_initialized';
