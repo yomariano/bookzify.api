@@ -18,18 +18,17 @@ services:
     labels:
       # Caddy Docker Proxy labels for subdomain
       - "caddy=api.bookzify.xyz"
-      - "caddy.reverse_proxy={{upstreams 5005}}"  # Use dynamic service discovery
+      - "caddy.reverse_proxy={{upstreams 5005}}"
       - "caddy.reverse_proxy.health_uri=/health"
       - "caddy.reverse_proxy.health_interval=5s"
       - "caddy.reverse_proxy.health_timeout=2s"
       - "caddy.tls.dns=cloudflare"
-      # CORS headers with proper format
-      - "caddy.header.Access-Control-Allow-Origin={http.request.header.Origin}"
-      - "caddy.header.Access-Control-Allow-Methods=GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
-      - "caddy.header.Access-Control-Allow-Headers=Content-Type, Authorization, X-Requested-With, Accept, Origin"
+      # CORS headers
+      - "caddy.header.Access-Control-Allow-Origin=https://bookzify.xyz"
+      - "caddy.header.Access-Control-Allow-Methods=GET,POST,PUT,DELETE,OPTIONS"
+      - "caddy.header.Access-Control-Allow-Headers=Content-Type,Authorization"
       - "caddy.header.Access-Control-Allow-Credentials=true"
       - "caddy.header.Access-Control-Max-Age=3600"
-      - "caddy.header.Vary=Origin"
       # Coolify management labels
       - "coolify.managed=true"
     healthcheck:
@@ -43,5 +42,4 @@ networks:
   coolify:
     external: true
   supabase:
-    external:
-      name: g00sk4cwgwk0cwkc8kcgc8gk 
+    external: true 
