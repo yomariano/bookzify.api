@@ -221,6 +221,15 @@ try {
                     } catch (error) {
                       return { data: null, error: { message: error.message, code: 'PG_ERROR' } };
                     }
+                  },
+                  maybeSingle: async () => {
+                    try {
+                      const query = `SELECT ${columns} FROM ${table} WHERE ${column} = $1 LIMIT 1`;
+                      const result = await pgClient.unsafe(query, [value]);
+                      return { data: result[0] || null, error: null };
+                    } catch (error) {
+                      return { data: null, error: { message: error.message, code: 'PG_ERROR' } };
+                    }
                   }
                 }),
                 limit: (limit) => ({
@@ -455,6 +464,26 @@ setTimeout(async () => {
           supabase = {
             from: (table) => ({
               select: (columns = '*') => ({
+                eq: (column, value) => ({
+                  single: async () => {
+                    try {
+                      const query = `SELECT ${columns} FROM ${table} WHERE ${column} = $1 LIMIT 1`;
+                      const result = await pgClient.unsafe(query, [value]);
+                      return { data: result[0] || null, error: null };
+                    } catch (error) {
+                      return { data: null, error: { message: error.message, code: 'PG_ERROR' } };
+                    }
+                  },
+                  maybeSingle: async () => {
+                    try {
+                      const query = `SELECT ${columns} FROM ${table} WHERE ${column} = $1 LIMIT 1`;
+                      const result = await pgClient.unsafe(query, [value]);
+                      return { data: result[0] || null, error: null };
+                    } catch (error) {
+                      return { data: null, error: { message: error.message, code: 'PG_ERROR' } };
+                    }
+                  }
+                }),
                 single: async () => {
                   try {
                     const query = `SELECT ${columns} FROM ${table} LIMIT 1`;
@@ -626,6 +655,12 @@ async function checkBookExists(downloadUrl) {
     if (!supabase) {
       throw new Error('Supabase client not initialized');
     }
+    
+    // Debug: Check if we're using PostgreSQL mode
+    console.log('🔧 Client type check:', {
+      hasStorageUpload: typeof supabase.storage?.from()?.upload === 'function',
+      isPostgreSQLMode: supabase.storage?.from()?.upload().error?.message?.includes('not available')
+    });
     
     const { data, error } = await supabase
       .from('books')
@@ -2572,6 +2607,15 @@ function createCustomSupabaseClient(pgClient, apiKey) {
       select: (columns = '*') => ({
         eq: (column, value) => ({
           single: async () => {
+            try {
+              const query = `SELECT ${columns} FROM ${table} WHERE ${column} = $1 LIMIT 1`;
+              const result = await pgClient.unsafe(query, [value]);
+              return { data: result[0] || null, error: null };
+            } catch (error) {
+              return { data: null, error: { message: error.message, code: 'CUSTOM_PG_ERROR' } };
+            }
+          },
+          maybeSingle: async () => {
             try {
               const query = `SELECT ${columns} FROM ${table} WHERE ${column} = $1 LIMIT 1`;
               const result = await pgClient.unsafe(query, [value]);
