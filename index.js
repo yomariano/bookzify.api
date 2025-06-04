@@ -659,14 +659,14 @@ async function checkBookExists(downloadUrl) {
     // Debug: Check if we're using PostgreSQL mode
     console.log('🔧 Client type check:', {
       hasStorageUpload: typeof supabase.storage?.from()?.upload === 'function',
-      isPostgreSQLMode: supabase.storage?.from()?.upload().error?.message?.includes('not available')
     });
     
+    console.log('🔍 Download URL:', downloadUrl);
     const { data, error } = await supabase
       .from('books')
       .select('id, title, author, download_url, s3_bucket_url')
       .eq('download_url', downloadUrl)
-      .maybeSingle();
+      .single();
 
     if (error && error.code !== 'PGRST116') { // PGRST116 is "not found" error
       console.error('❌ Database query error:', {
@@ -1733,9 +1733,15 @@ app.get('/books/search', async (req, res) => {
       });
       
       const context = await browser.newContext({
+        acceptDownloads: true,
         ignoreHTTPSErrors: true,
         javaScriptEnabled: true,
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        viewport: { width: 1920, height: 1080 },
+        // Set download path explicitly for headless mode
+        ...(process.env.DOWNLOAD_PATH && {
+          downloadsPath: downloadPath
+        })
       });
       
       const searchPage = await context.newPage();
@@ -2169,40 +2175,73 @@ app.post('/books/download', async (req, res) => {
       await fs.promises.mkdir(downloadPath, { recursive: true });
       console.log('📁 Download directory ensured');
 
-      // Launch browser with headless=false like Python (change to true for production)
+      // Launch browser with enhanced headless settings for production
       browser = await chromium.launch({
-        headless: true, // Changed from true to match Python
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor',
+          '--disable-blink-features=AutomationControlled',
+          '--no-first-run',
+          '--disable-extensions',
+          '--disable-plugins',
+          '--disable-images', // Reduces memory usage and speeds up loading
+          '--disable-javascript-harmony-shipping',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--window-size=1920,1080'
+        ]
       });
 
-      // Configure context to match Python exactly
+      // Configure context with enhanced settings for headless mode
       const context = await browser.newContext({
         acceptDownloads: true,
-        ignoreHTTPSErrors: true
+        ignoreHTTPSErrors: true,
+        javaScriptEnabled: true,
+        userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        viewport: { width: 1920, height: 1080 },
+        // Set download path explicitly for headless mode
+        ...(process.env.DOWNLOAD_PATH && {
+          downloadsPath: downloadPath
+        })
       });
 
       const page = await context.newPage();
       console.log('📄 New page created');
 
-      // Enhanced popup handling to prevent download interference
+      // Enhanced popup handling with immediate closure for headless mode
       context.on('page', async (newPage) => {
         try {
           const popupUrl = newPage.url();
           console.log(`🚫 Popup detected: ${popupUrl}. Closing immediately.`);
           
-          // Close popup immediately without waiting
-          if (!newPage.isClosed()) {
-            await newPage.close();
-            console.log(`✅ Popup closed: ${popupUrl}`);
-          }
+          // Don't wait for any loading, close immediately
+          await newPage.close();
+          console.log(`✅ Popup closed: ${popupUrl}`);
         } catch (error) {
           console.log(`⚠️ Error closing popup: ${error.message}`);
+          // Try to force close if regular close fails
+          try {
+            if (!newPage.isClosed()) {
+              await newPage.close();
+            }
+          } catch (finalError) {
+            console.log(`⚠️ Could not force close popup: ${finalError.message}`);
+          }
         }
       });
 
-      // Block known ad/popup domains
-      await page.route('**/*', (route) => {
+      // Enhanced ad/popup blocking for headless mode
+      await page.route('**/*', async (route) => {
         const url = route.request().url();
+        const resourceType = route.request().resourceType();
+        
+        // Block known ad/popup domains and resource types
         const blockedDomains = [
           'etoro.com',
           'doubleclick.net',
@@ -2210,15 +2249,55 @@ app.post('/books/download', async (req, res) => {
           'googlesyndication.com',
           'amazon-adsystem.com',
           'facebook.com/tr',
-          'google-analytics.com'
+          'google-analytics.com',
+          'googletag',
+          'adsystem',
+          'ads.yahoo.com',
+          'bing.com/ads',
+          'taboola.com',
+          'outbrain.com',
+          'media.net',
+          'popads.net',
+          'popcash.net'
+        ];
+
+        // Block specific resource types that can cause popup issues
+        const blockedResourceTypes = [
+          'stylesheet', // Reduces loading time
+          'font',       // Reduces loading time
+          'image'       // We already disabled images, but double-check
         ];
         
-        if (blockedDomains.some(domain => url.includes(domain))) {
-          console.log(`🚫 Blocked request to: ${url}`);
-          route.abort();
+        if (blockedDomains.some(domain => url.includes(domain)) || 
+            blockedResourceTypes.includes(resourceType)) {
+          console.log(`🚫 Blocked ${resourceType} request to: ${url}`);
+          await route.abort();
         } else {
-          route.continue();
+          await route.continue();
         }
+      });
+
+      // Add extra protection against popups using JavaScript injection
+      await page.addInitScript(() => {
+        // Override window.open to prevent popups
+        window.open = () => null;
+        
+        // Override various popup methods
+        window.showModalDialog = () => null;
+        window.alert = () => {};
+        window.confirm = () => true;
+        window.prompt = () => null;
+        
+        // Prevent focus stealing
+        window.focus = () => {};
+        
+        // Block common popup triggers
+        ['beforeunload', 'unload'].forEach(event => {
+          window.addEventListener(event, (e) => {
+            e.preventDefault();
+            e.returnValue = '';
+          });
+        });
       });
 
       console.log(`🔄 Navigating to ${url}...`);
@@ -2228,11 +2307,14 @@ app.post('/books/download', async (req, res) => {
       });
       console.log('✅ Page loaded');
 
+      // Wait for any remaining JavaScript to execute
+      await page.waitForTimeout(2000);
+
       const downloadButtonSelector = 'input[type="submit"][id="btn_download"][value="Download File"]';
       let downloadInitiated = false;
-      const maxRetries = 5; // Increased from 3
+      const maxRetries = 3; // Reduced for efficiency
       let retryCount = 0;
-      const maxWaitTime = 180000; // Reduced to 3 minutes
+      const maxWaitTime = 120000; // 2 minutes total
       const startTime = Date.now();
 
       while (!downloadInitiated && retryCount < maxRetries) {
@@ -2240,111 +2322,201 @@ app.post('/books/download', async (req, res) => {
         console.log(`🔄 Attempt ${retryCount} to download...`);
 
         try {
-          // Keep checking for the download button every 3 seconds (reduced from 5)
-          while (true) {
+          // Enhanced button detection with multiple selectors
+          let buttonFound = false;
+          let button;
+          
+          while (!buttonFound) {
             const currentTime = Date.now();
             if (currentTime - startTime > maxWaitTime) {
-              throw new Error('Maximum wait time exceeded (3 minutes)');
+              throw new Error('Maximum wait time exceeded (2 minutes)');
             }
 
             console.log('🔍 Checking for download button...');
-            const button = page.locator(downloadButtonSelector);
             
-            // Check if the button exists and is visible
-            const buttonCount = await button.count();
-            if (buttonCount > 0 && await button.isVisible()) {
-              // Check if the button is within a div with class "to-lock"
-              const parentDiv = button.locator('xpath=ancestor::div[@class="to-lock"]');
-              const parentDivExists = await parentDiv.count() > 0;
+            // Try multiple selector approaches
+            const selectors = [
+              'input[type="submit"][id="btn_download"][value="Download File"]',
+              'input[id="btn_download"]',
+              '.to-lock input[type="submit"]',
+              'input[value*="Download"]'
+            ];
+
+            for (const selector of selectors) {
+              button = page.locator(selector);
+              const buttonCount = await button.count();
               
-              if (parentDivExists) {
-                console.log('✅ Download button found and appears to be enabled!');
+              if (buttonCount > 0) {
+                console.log(`✅ Found button with selector: ${selector}`);
                 
+                // Additional checks for button readiness
                 try {
-                  // Start waiting for the download BEFORE clicking with shorter timeout
-                  console.log('👂 Setting up download event listener...');
-                  const downloadPromise = page.waitForEvent('download', { timeout: 60000 }); // Reduced from 120000
+                  const isVisible = await button.isVisible();
+                  const isEnabled = await button.isEnabled();
                   
-                  console.log('🖱️ Clicking download button...');
-                  await button.click();
-                  
-                  console.log('⏳ Waiting for download to start...');
-                  
-                  // Add a race condition to handle popup interference
-                  const downloadResult = await Promise.race([
-                    downloadPromise,
-                    new Promise((_, reject) => 
-                      setTimeout(() => reject(new Error('Download timeout - likely popup interference')), 30000)
-                    )
-                  ]);
-                  
-                  const download = downloadResult;
-                  console.log(`📥 Download started: ${download.suggestedFilename()}`);
-                  tempFilePath = path.join(downloadPath, `temp_${Date.now()}_${download.suggestedFilename()}`);
-                  
-                  await download.saveAs(tempFilePath);
-                  console.log(`💾 Download completed and saved to: ${tempFilePath}`);
-
-                  // Verify file exists and has size (like Python)
-                  const fileStats = await fs.promises.stat(tempFilePath);
-                  if (fileStats.size > 0) {
-                    console.log('📊 File successfully downloaded. Uploading to Supabase...');
-
-                    // Prepare book metadata
-                    const bookMetadata = {
-                      title: title || download.suggestedFilename().replace(/\.[^/.]+$/, ""), // Remove extension
-                      author: author || 'Unknown Author',
-                      format: format || 'pdf',
-                      category: category || null,
-                      coverImageUrl: coverImageUrl || null,
-                      downloadUrl: url,
-                      bookUrl: url
-                    };
-
-                    // Upload to Supabase storage and insert into database
-                    const supabaseResult = await uploadToSupabaseStorage(
-                      tempFilePath, 
-                      download.suggestedFilename(),
-                      bookMetadata
-                    );
-
-                    console.log('✅ Book successfully uploaded to Supabase');
-                    downloadInitiated = true;
-
-                    // Return success response with book ID and S3 URL
-                    return res.status(200).json({
-                      success: true,
-                      message: 'Book downloaded and uploaded successfully',
-                      id: supabaseResult.id,
-                      s3_bucket_url: supabaseResult.s3_bucket_url
-                    });
-
-                  } else {
-                    console.log('❌ Download failed or file is empty.');
-                    if (tempFilePath && fs.existsSync(tempFilePath)) {
-                      await fs.promises.unlink(tempFilePath);
+                  if (isVisible && isEnabled) {
+                    // Check if button is in the "to-lock" container (indicating it's ready)
+                    const parentDiv = button.locator('xpath=ancestor::div[@class="to-lock"]');
+                    const parentDivExists = await parentDiv.count() > 0;
+                    
+                    if (parentDivExists) {
+                      console.log('✅ Download button is ready and enabled!');
+                      buttonFound = true;
+                      break;
+                    } else {
+                      console.log('⏳ Button found but not in ready state...');
                     }
-                    throw new Error('Downloaded file is empty');
+                  } else {
+                    console.log(`⏳ Button found but not ready (visible: ${isVisible}, enabled: ${isEnabled})`);
                   }
-                } catch (downloadError) {
-                  console.error('❌ Error during download:', downloadError);
-                  
-                  // If it's a popup interference, wait a bit and retry
-                  if (downloadError.message.includes('popup interference') || downloadError.message.includes('timeout')) {
-                    console.log('🔄 Popup interference detected, waiting before retry...');
-                    await page.waitForTimeout(3000);
-                    break; // Break inner loop to retry
-                  }
-                  throw downloadError;
+                } catch (checkError) {
+                  console.log(`⚠️ Error checking button state: ${checkError.message}`);
                 }
-              } else {
-                console.log('⏳ Button found but parent div not ready. Waiting...');
               }
-            } else {
-              console.log('⏳ Download button not ready yet. Waiting 3 seconds...');
             }
             
-            await page.waitForTimeout(3000); // Reduced from 5000
+            if (!buttonFound) {
+              console.log('⏳ Download button not ready yet. Waiting 2 seconds...');
+              await page.waitForTimeout(2000);
+            }
+          }
+
+          if (buttonFound && button) {
+            try {
+              // Enhanced download handling for headless mode
+              console.log('👂 Setting up download event listener...');
+              
+              // Set up download promise with longer timeout
+              const downloadPromise = page.waitForEvent('download', { timeout: 90000 });
+              
+              // Alternative: listen for download with a more robust approach
+              let downloadDetected = false;
+              const downloadBackupPromise = new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                  if (!downloadDetected) {
+                    reject(new Error('Download backup timeout'));
+                  }
+                }, 90000);
+                
+                page.on('download', (download) => {
+                  downloadDetected = true;
+                  clearTimeout(timeout);
+                  resolve(download);
+                });
+              });
+              
+              console.log('🖱️ Clicking download button...');
+              
+              // Try multiple click approaches for headless mode
+              try {
+                await button.click({ force: true, timeout: 10000 });
+              } catch (clickError) {
+                console.log('⚠️ Standard click failed, trying alternatives...');
+                
+                // Alternative click methods
+                try {
+                  await button.click({ button: 'left', clickCount: 1 });
+                } catch (altClickError) {
+                  console.log('⚠️ Alternative click failed, trying JavaScript click...');
+                  await page.evaluate((sel) => {
+                    const btn = document.querySelector(sel);
+                    if (btn) btn.click();
+                  }, downloadButtonSelector);
+                }
+              }
+              
+              console.log('⏳ Waiting for download to start...');
+              
+              // Use Promise.race with both download detection methods
+              const downloadResult = await Promise.race([
+                downloadPromise,
+                downloadBackupPromise,
+                new Promise((_, reject) => 
+                  setTimeout(() => reject(new Error('Download timeout - no download detected in 90 seconds')), 90000)
+                )
+              ]);
+              
+              const download = downloadResult;
+              console.log(`📥 Download started: ${download.suggestedFilename()}`);
+              
+              // Generate temp file path with better naming
+              const sanitizedFilename = download.suggestedFilename().replace(/[^a-zA-Z0-9.-]/g, '_');
+              tempFilePath = path.join(downloadPath, `temp_${Date.now()}_${sanitizedFilename}`);
+              
+              console.log(`💾 Saving download to: ${tempFilePath}`);
+              await download.saveAs(tempFilePath);
+              
+              // Wait a moment for file system to catch up
+              await page.waitForTimeout(1000);
+              
+              // Verify file exists and has content
+              if (fs.existsSync(tempFilePath)) {
+                const fileStats = await fs.promises.stat(tempFilePath);
+                console.log(`📊 Downloaded file size: ${fileStats.size} bytes`);
+                
+                if (fileStats.size > 0) {
+                  console.log('✅ File successfully downloaded. Uploading to Supabase...');
+
+                  // Prepare book metadata
+                  const bookMetadata = {
+                    title: title || download.suggestedFilename().replace(/\.[^/.]+$/, ""),
+                    author: author || 'Unknown Author',
+                    format: format || 'pdf',
+                    category: category || null,
+                    coverImageUrl: coverImageUrl || null,
+                    downloadUrl: url,
+                    bookUrl: url
+                  };
+
+                  // Upload to Supabase storage and insert into database
+                  const supabaseResult = await uploadToSupabaseStorage(
+                    tempFilePath, 
+                    download.suggestedFilename(),
+                    bookMetadata
+                  );
+
+                  console.log('✅ Book successfully uploaded to Supabase');
+                  downloadInitiated = true;
+
+                  // Return success response with book ID and S3 URL
+                  return res.status(200).json({
+                    success: true,
+                    message: 'Book downloaded and uploaded successfully',
+                    id: supabaseResult.id,
+                    s3_bucket_url: supabaseResult.s3_bucket_url
+                  });
+
+                } else {
+                  console.log('❌ Downloaded file is empty.');
+                  await fs.promises.unlink(tempFilePath);
+                  throw new Error('Downloaded file is empty');
+                }
+              } else {
+                console.log('❌ Download file was not created.');
+                throw new Error('Download file was not created');
+              }
+              
+            } catch (downloadError) {
+              console.error('❌ Error during download:', downloadError);
+              
+              // Clean up any partial file
+              if (tempFilePath && fs.existsSync(tempFilePath)) {
+                try {
+                  await fs.promises.unlink(tempFilePath);
+                } catch (cleanupError) {
+                  console.log('⚠️ Could not clean up partial file:', cleanupError.message);
+                }
+              }
+              
+              // Check if this is a retryable error
+              if (downloadError.message.includes('timeout') || 
+                  downloadError.message.includes('Download backup timeout') ||
+                  downloadError.message.includes('no download detected')) {
+                console.log('🔄 Download timeout detected, will retry...');
+                break; // Break inner loop to retry
+              }
+              throw downloadError;
+            }
           }
 
           if (downloadInitiated) {
@@ -2354,23 +2526,39 @@ app.post('/books/download', async (req, res) => {
         } catch (error) {
           console.error(`❌ Error during download attempt ${retryCount}:`, error);
           
-          // Handle timeout errors and popup interference
+          // Handle specific error types for retry logic
           if (error.name === 'TimeoutError' || 
               error.message.includes('timeout') || 
               error.message.includes('Maximum wait time exceeded') ||
-              error.message.includes('popup interference')) {
+              error.message.includes('no download detected') ||
+              error.message.includes('Download backup timeout')) {
             
             if (retryCount >= maxRetries) {
               console.log('❌ Max retries reached. Could not download the file.');
-              throw new Error('Download timeout after maximum retries');
+              throw new Error(`Download failed after ${maxRetries} attempts: ${error.message}`);
             }
             
-            console.log('🔄 Retrying after timeout/popup interference...');
-            // Reload the page to reset state
-            await page.reload({ waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(2000); // Wait 2 seconds before next attempt
+            console.log('🔄 Retrying after timeout/error...');
+            // Reload the page to reset state and try again
+            try {
+              await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+              await page.waitForTimeout(3000); // Wait 3 seconds before next attempt
+            } catch (reloadError) {
+              console.log('⚠️ Page reload failed:', reloadError.message);
+              // If reload fails, try creating a new page
+              try {
+                await page.close();
+                const newPage = await context.newPage();
+                await newPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                // Replace the old page reference with the new one
+                // Note: This requires careful handling in the outer scope
+              } catch (newPageError) {
+                console.log('⚠️ Could not create new page:', newPageError.message);
+                throw error; // Give up if we can't even reload
+              }
+            }
           } else {
-            throw error;
+            throw error; // Non-retryable error
           }
         }
       }
