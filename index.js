@@ -20,6 +20,7 @@ const __dirname = path.dirname(__filename);
 // Temporary diagnostic: Log available environment variables
 console.log('🔍 Environment variable diagnostics:');
 console.log(`📡 NODE_ENV: ${process.env.NODE_ENV || 'not set'}`);
+console.log(`🔒 CORS_ALLOWED_ORIGINS: ${process.env.CORS_ALLOWED_ORIGINS || 'not set'}`);
 console.log(`🔗 SUPABASE_URL: ${process.env.SUPABASE_URL ? 'set' : 'not set'}`);
 console.log(`🔑 SERVICE_SUPABASEANON_KEY: ${process.env.SERVICE_SUPABASEANON_KEY ? 'set' : 'not set'}`);
 console.log(`🔑 SUPABASE_ANON_KEY: ${process.env.SUPABASE_ANON_KEY ? 'set' : 'not set'}`);
@@ -707,12 +708,14 @@ const PORT = process.env.PORT || 5005;
 // Enhanced CORS configuration for main domain API serving
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
-    ? [
-        // Production domains - allow both main domain and API subdomain
-        'https://bookzify.xyz',
-        'https://www.bookzify.xyz',
-        'https://api.bookzify.xyz'
-      ]
+    ? (process.env.CORS_ALLOWED_ORIGINS 
+        ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
+        : [
+            // Fallback production domains - allow both main domain and API subdomain
+            'https://bookzify.xyz',
+            'https://www.bookzify.xyz',
+            'https://api.bookzify.xyz'
+          ])
     : [
         // Development origins
         'http://localhost:3000',    // Next.js default
@@ -747,6 +750,24 @@ const corsOptions = {
   ]
 };
 
+// Enhanced CORS logging
+console.log('🔒 CORS Configuration:');
+console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
+console.log(`🌍 CORS_ALLOWED_ORIGINS env var: ${process.env.CORS_ALLOWED_ORIGINS || 'not set'}`);
+
+if (process.env.NODE_ENV === 'production') {
+  const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS 
+    ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
+    : ['https://bookzify.xyz', 'https://www.bookzify.xyz', 'https://api.bookzify.xyz'];
+  
+  console.log('✅ Production CORS origins:');
+  allowedOrigins.forEach((origin, index) => {
+    console.log(`   ${index + 1}. ${origin}`);
+  });
+} else {
+  console.log('🔧 Development CORS: localhost patterns + specific ports');
+}
+
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'dist')));
@@ -755,20 +776,40 @@ app.use(express.static(path.join(__dirname, 'dist')));
 app.use((req, res, next) => {
   const origin = req.get('Origin');
   const host = req.get('Host');
+  const method = req.method;
+  const path = req.path;
   
-  console.log(`🌐 CORS Debug:
-    Origin: ${origin || 'not set'}
-    Host: ${host || 'not set'}
-    Method: ${req.method}
-    Path: ${req.path}
-    Environment: ${process.env.NODE_ENV}
+  // Only log if there's an actual Origin header (real CORS request) or if it's an OPTIONS request
+  if (origin || method === 'OPTIONS') {
+    console.log(`🌐 CORS Request Debug:
+    📍 Origin: ${origin || 'not set'}
+    🏠 Host: ${host || 'not set'}
+    🔧 Method: ${method}
+    📁 Path: ${path}
+    🌍 Environment: ${process.env.NODE_ENV || 'development'}
   `);
-  
-  if (origin) {
-    const isAllowed = corsOptions.origin.includes(origin) || 
-      (typeof corsOptions.origin[0] === 'object' && corsOptions.origin.some(pattern => pattern.test(origin)));
-    console.log(`🔒 CORS: ${isAllowed ? 'Allowed' : 'Blocked'} request from origin: ${origin}`);
+    
+    if (origin) {
+      // Check if origin is allowed
+      const allowedOrigins = process.env.NODE_ENV === 'production' 
+        ? (process.env.CORS_ALLOWED_ORIGINS 
+            ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(o => o.trim())
+            : ['https://bookzify.xyz', 'https://www.bookzify.xyz', 'https://api.bookzify.xyz'])
+        : corsOptions.origin.filter(o => typeof o === 'string'); // Only string origins for simple check
+      
+      const isAllowed = allowedOrigins.includes(origin) || 
+        (typeof corsOptions.origin !== 'string' && corsOptions.origin.some(pattern => 
+          pattern instanceof RegExp ? pattern.test(origin) : pattern === origin
+        ));
+        
+      console.log(`🔒 CORS Status: ${isAllowed ? '✅ ALLOWED' : '❌ BLOCKED'} for origin: ${origin}`);
+      
+      if (!isAllowed) {
+        console.log(`📋 Allowed origins: ${JSON.stringify(allowedOrigins, null, 2)}`);
+      }
+    }
   }
+  
   next();
 });
 
@@ -2688,12 +2729,21 @@ app.get('/cors-test', cors(corsOptions), (req, res) => {
   const origin = req.get('Origin');
   const host = req.get('Host');
   
+  // Get current allowed origins based on environment
+  const currentAllowedOrigins = process.env.NODE_ENV === 'production' 
+    ? (process.env.CORS_ALLOWED_ORIGINS 
+        ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
+        : ['https://bookzify.xyz', 'https://www.bookzify.xyz', 'https://api.bookzify.xyz'])
+    : corsOptions.origin;
+  
   res.json({
     success: true,
     cors: {
       origin: origin || 'not set',
       host: host || 'not set',
-      allowed_origins: corsOptions.origin,
+      current_allowed_origins: currentAllowedOrigins,
+      environment_variable: process.env.CORS_ALLOWED_ORIGINS || 'not set',
+      using_env_var: !!(process.env.NODE_ENV === 'production' && process.env.CORS_ALLOWED_ORIGINS),
       allowed_methods: corsOptions.methods,
       allowed_headers: corsOptions.allowedHeaders,
       exposed_headers: corsOptions.exposedHeaders,
