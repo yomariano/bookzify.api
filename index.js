@@ -882,6 +882,54 @@ app.get('/cors-test-simple', (req, res) => {
   });
 });
 
+// Network diagnostics endpoint for Docker/Caddy troubleshooting
+app.get('/network-debug', (req, res) => {
+  const networkInfo = {
+    timestamp: new Date().toISOString(),
+    container_info: {
+      hostname: process.env.HOSTNAME || 'unknown',
+      node_env: process.env.NODE_ENV,
+      port: process.env.PORT || '5005',
+      host: process.env.HOST || '0.0.0.0'
+    },
+    request_info: {
+      method: req.method,
+      url: req.url,
+      headers: req.headers,
+      ip: req.ip,
+      ips: req.ips,
+      protocol: req.protocol,
+      secure: req.secure,
+      original_url: req.originalUrl
+    },
+    network_interfaces: {},
+    process_info: {
+      pid: process.pid,
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      platform: process.platform,
+      arch: process.arch,
+      node_version: process.version
+    }
+  };
+
+  // Try to get network interfaces info
+  try {
+    const os = require('os');
+    networkInfo.network_interfaces = os.networkInterfaces();
+  } catch (error) {
+    networkInfo.network_interfaces_error = error.message;
+  }
+
+  console.log('🔧 Network debug requested:', {
+    from: req.ip,
+    user_agent: req.get('User-Agent'),
+    timestamp: networkInfo.timestamp
+  });
+
+  res.json(networkInfo);
+});
+
 // OpenRouter API proxy
 app.post('/api/openrouter/chat', async (req, res) => {
   try {
@@ -2503,11 +2551,17 @@ if (fs.existsSync(path.join(__dirname, 'dist'))) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📚 Book API endpoints available at http://localhost:${PORT}/books/*`);
-  console.log(`🤖 AI API proxies available at http://localhost:${PORT}/api/*`);
-  console.log(`🔮 OpenRouter (Google Gemma) available at http://localhost:${PORT}/api/openrouter/chat`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
+  console.log(`🌐 Accessible from Docker network on port ${PORT}`);
+  console.log(`📚 Book API endpoints available at http://0.0.0.0:${PORT}/books/*`);
+  console.log(`🤖 AI API proxies available at http://0.0.0.0:${PORT}/api/*`);
+  console.log(`🔮 OpenRouter (Google Gemma) available at http://0.0.0.0:${PORT}/api/openrouter/chat`);
+  console.log(`🧪 CORS test available at http://0.0.0.0:${PORT}/cors-test-simple`);
+  
+  // Log network binding info
+  console.log(`📡 Server bound to 0.0.0.0:${PORT} for Docker network access`);
+  console.log(`🔗 Caddy should proxy to: http://<container-name>:${PORT}`);
 }); 
 
 // Custom Supabase client that uses direct PostgreSQL connection

@@ -25,14 +25,18 @@ services:
       - "caddy.tls.dns=cloudflare"
       # Let the Node.js application handle CORS instead of Caddy
       # This prevents conflicts between Caddy and Express CORS middleware
+      # Additional debugging and reliability settings
+      - "caddy.reverse_proxy.lb_policy=round_robin"
+      - "caddy.reverse_proxy.fail_duration=10s"
+      - "caddy.reverse_proxy.max_fails=3"
       # Coolify management labels
       - "coolify.managed=true"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5005/"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://0.0.0.0:5005/health"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 30s
 
 networks:
   coolify:
