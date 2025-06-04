@@ -81,26 +81,37 @@ async function validateSupabaseConnection(supabaseClient, connectionString) {
   }
 }
 
-// Initialize Supabase client with environment-specific URL
+// Initialize Supabase client with environment-specific URL and proper fallback
 let supabaseUrl;
+let supabaseKey;
+
+// STEP 1: Determine the correct Supabase URL
 if (process.env.NODE_ENV === 'production') {
-  // For production, we still need to use the Supabase HTTP URL, not a PostgreSQL connection string
-  // The Supabase JavaScript client connects to the REST API, not directly to PostgreSQL
-  supabaseUrl = process.env.SUPABASE_URL;
+  console.log('🔧 Using Supabase REST API URL for production');
+  
+  // Try multiple URL sources in order of preference
+  const urlCandidates = [
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_INTERNAL_URL, 
+    process.env.SUPABASE_EXTERNAL_URL,
+    // Fallback: external URL from Supabase env
+    'https://supabasekong-g00sk4cwgwk0cwkc8kcgc8gk.bookzify.xyz'
+  ].filter(Boolean);
+  
+  supabaseUrl = urlCandidates[0];
   
   if (!supabaseUrl) {
-    console.error('❌ SUPABASE_URL is required for production environment');
-    console.error('💡 The Supabase JavaScript client requires an HTTP/HTTPS URL like: https://your-project.supabase.co');
-    console.error('💡 It cannot use PostgreSQL connection strings directly.');
+    console.error('❌ No Supabase URL found in environment variables');
+    console.error('💡 Required: SUPABASE_URL, SUPABASE_INTERNAL_URL, or SUPABASE_EXTERNAL_URL');
     process.exit(1);
   }
   
-  console.log('🔧 Using Supabase REST API URL for production');
-  
-  // PRODUCTION NETWORK FALLBACK: Try internal Docker networking if external fails
-  if (process.env.COOLIFY_URL) {
-    console.log('🐳 Detected Coolify/Docker environment - will implement internal networking fallback if external fails');
+  console.log(`📍 Primary URL: ${supabaseUrl}`);
+  if (urlCandidates.length > 1) {
+    console.log(`🔄 Fallback URLs available: ${urlCandidates.slice(1).length}`);
   }
+  
+  console.log('🐳 Detected Coolify/Docker environment - will implement internal networking fallback if external fails');
   
 } else {
   // For development, use the standard Supabase URL
@@ -108,54 +119,51 @@ if (process.env.NODE_ENV === 'production') {
   console.log('🔧 Using standard Supabase URL for development');
 }
 
-const supabaseKey = process.env.SERVICE_SUPABASEANON_KEY || process.env.SUPABASE_ANON_KEY;
+// STEP 2: Determine the correct API key
+// Priority: SUPABASE_ANON_KEY > SERVICE_SUPABASEANON_KEY
+const anonKey = process.env.SUPABASE_ANON_KEY || process.env.SERVICE_SUPABASEANON_KEY;
+const serviceKey = process.env.SERVICE_SUPABASESERVICE_KEY;
 
-// Debug: Compare with frontend key.
-const frontendKey = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc0NzUxODI0MCwiZXhwIjo0OTAzMTkxODQwLCJyb2xlIjoic2VydmljZV9yb2xlIn0.-Q1GLX4t6XshgYFIeYfCx5bgNsYVAhu-2CP5VC_RpjM";
+// Use anon key for normal operations (same as frontend)
+supabaseKey = anonKey;
 
 console.log('🔑 API Key Comparison:');
-console.log(`🔧 Backend using: ${process.env.SERVICE_SUPABASEANON_KEY ? 'SERVICE_SUPABASEANON_KEY' : 'SUPABASE_ANON_KEY'}`);
-console.log(`🔧 Backend key: ${supabaseKey ? supabaseKey.substring(0, 50) + '...' : 'MISSING'}`);
-console.log(`🖥️ Frontend key: ${frontendKey.substring(0, 50)}...`);
-console.log(`🔍 Keys match: ${supabaseKey === frontendKey ? '✅ YES' : '❌ NO'}`);
+console.log(`🔧 Backend using: ${process.env.SUPABASE_ANON_KEY ? 'SUPABASE_ANON_KEY' : 'SERVICE_SUPABASEANON_KEY'}`);
+console.log(`🔧 Backend key: ${anonKey ? anonKey.substring(0, 50) + '...' : 'not set'}`);
 
-// Enhanced environment variable validation
-const requiredEnvVars = {
-  'SUPABASE_URL': supabaseUrl,
-  'SERVICE_SUPABASEANON_KEY or SUPABASE_ANON_KEY': supabaseKey,
-  'VITE_OPENROUTER_API_KEY': process.env.VITE_OPENROUTER_API_KEY,
-  'VITE_HUGGINGFACE_API_KEY': process.env.VITE_HUGGINGFACE_API_KEY
-};
+// Debug: Compare with expected keys from Supabase environment
+const expectedAnonKey = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc0NzUxODI0MCwiZXhwIjo0OTAzMTkxODQwLCJyb2xlIjoiYW5vbiJ9.zS-orKiyJHsw_8XnPaaUHOEUvhiYSR-BX-UPQRNIRXQ";
+const expectedServiceKey = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc0NzUxODI0MCwiZXhwIjo0OTAzMTkxODQwLCJyb2xlIjoic2VydmljZV9yb2xlIn0.-Q1GLX4t6XshgYFIeYfCx5bgNsYVAhu-2CP5VC_RpjM";
+
+console.log(`🖥️ Expected anon key: ${expectedAnonKey.substring(0, 50)}...`);
+console.log(`🔍 Keys match: ${anonKey === expectedAnonKey ? '✅ YES' : '❌ NO'}`);
+
+if (anonKey !== expectedAnonKey) {
+  console.log('⚠️ Warning: API key mismatch detected. Using provided key but this may cause issues.');
+}
 
 // Optional validation for PostgreSQL credentials (for direct DB access if needed later)
 if (process.env.NODE_ENV === 'production' && process.env.POSTGRES_PASSWORD) {
   console.log('📝 PostgreSQL credentials available for direct database access if needed');
-  console.log(`🔗 PostgreSQL connection: postgresql://postgres:***@supabase-db:5432/postgres`);
+  
+  // Use service name for Docker networking, fallback to IP
+  const postgresHost = process.env.POSTGRES_HOST || 'supabase-db-g00sk4cwgwk0cwkc8kcgc8gk';
+  console.log(`🔗 PostgreSQL connection: postgresql://postgres:***@${postgresHost}:5432/postgres`);
 }
 
-const missingEnvVars = Object.entries(requiredEnvVars)
-  .filter(([key, value]) => !value)
-  .map(([key]) => key);
-
-if (missingEnvVars.length > 0) {
-  console.error('❌ Missing required environment variables:', missingEnvVars.join(', '));
-  process.exit(1);
-}
-
-// Enhanced Supabase client initialization with better error handling
+// STEP 3: Enhanced Supabase client initialization with better error handling
 let supabase;
 try {
   console.log('🔧 Initializing Supabase client...');
   console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 Supabase URL: ${supabaseUrl.replace(/password=[^&]*/g, 'password=***')}`);
+  console.log(`🔗 Supabase URL: ${supabaseUrl}`);
   console.log(`🔑 Using ${supabaseKey ? 'valid' : 'missing'} API key`);
   
-  // TEMPORARY: Use same configuration as working frontend
+  // Use same configuration as working frontend
   supabase = createClient(supabaseUrl, supabaseKey, {
     auth: {
       persistSession: false
     }
-    // Removed custom fetch wrapper temporarily to match frontend
   });
   
   console.log('✅ Supabase client created successfully (simplified config)');
@@ -164,19 +172,21 @@ try {
   if (process.env.NODE_ENV === 'production') {
     console.log('🔧 Production environment detected - testing connectivity...');
     
-    // IMMEDIATE PostgreSQL FALLBACK: Try direct connection first to bypass network issues
+    // Try PostgreSQL direct connection first if credentials available
     if (process.env.POSTGRES_PASSWORD) {
       console.log('💾 PostgreSQL credentials detected - attempting direct connection as primary method...');
       
       try {
         const postgres = await import('postgres');
+        const postgresHost = process.env.POSTGRES_HOST || 'supabase-db-g00sk4cwgwk0cwkc8kcgc8gk';
+        
         const pgClient = postgres.default({
-          host: 'supabase-db', 
+          host: postgresHost, 
           port: 5432,
           database: 'postgres',
           username: 'postgres',
           password: process.env.POSTGRES_PASSWORD,
-          connect_timeout: 5,
+          connect_timeout: 10,
           max: 10
         });
         
@@ -192,7 +202,6 @@ try {
                 eq: (column, value) => ({
                   single: async () => {
                     try {
-                      // Use template literals for table and column names (unsafe but needed for dynamic queries)
                       const query = `SELECT ${columns} FROM ${table} WHERE ${column} = $1 LIMIT 1`;
                       const result = await pgClient.unsafe(query, [value]);
                       return { data: result[0] || null, error: null };
@@ -266,7 +275,7 @@ try {
           console.log('🔄 Supabase client replaced with PostgreSQL direct connection.');
           console.log('⚠️ Note: Storage operations disabled due to network isolation, but database queries will function.');
           
-          // Skip the network test since we're using direct PostgreSQL - use flag instead of return
+          // Skip the network test since we're using direct PostgreSQL
           console.log('✅ PostgreSQL mode active - skipping network-based tests');
         }
       } catch (pgError) {
@@ -275,85 +284,11 @@ try {
       }
     }
     
-    // Original network-based fallback (only if PostgreSQL failed)
-    setTimeout(async () => {
-      try {
-        console.log('🧪 Testing production Supabase connectivity...');
-        const { data, error } = await supabase
-          .from('books')
-          .select('*', { count: 'exact' })           
-          .limit(1)
-          .single();
-        
-        if (error && error.code !== 'PGRST116') {
-          console.error('❌ Production Supabase connectivity failed:', error);
-          console.log('🔄 Implementing production networking workaround...');
-          
-          // Create fallback client with internal networking
-          const fallbackClient = createClient(supabaseUrl, supabaseKey, {
-            auth: { persistSession: false }
-            // Removed complex fallback fetch wrapper - using simpler approach
-          });
-          
-          // Test if the simplified client works better
-          console.log('🧪 Testing simplified fallback client...');
-          const { data: testData, error: testError } = await fallbackClient
-            .from('books')
-            .select('id', { count: 'exact', head: true })
-            .limit(1);
-          
-          if (!testError || testError.code === 'PGRST116') {
-            console.log('✅ Simplified fallback client works! Replacing global client...');
-            supabase = fallbackClient;
-          } else {
-            console.log('❌ Simplified fallback also failed, keeping original client');
-          }
-          
-        } else {
-          console.log('✅ Production Supabase connectivity working normally');
-        }
-      } catch (testError) {
-        console.error('❌ Production connectivity test failed:', testError);
-        console.log('ℹ️ Continuing with standard client - some features may be limited');
-        
-        // ULTIMATE FALLBACK: Direct PostgreSQL connection if available
-        if (process.env.POSTGRES_PASSWORD) {
-          console.log('🔄 Network connectivity failed. Attempting direct PostgreSQL connection...');
-          console.log('📋 PostgreSQL credentials detected - implementing direct DB fallback');
-          console.log('🔗 PostgreSQL available at: postgresql://postgres:***@supabase-db:5432/postgres');
-          
-          try {
-            // Try to create a direct PostgreSQL connection using pg library
-            const { createClient } = await import('postgres');
-            
-            const pgClient = createClient({
-              host: 'supabase-db',
-              port: 5432,
-              database: 'postgres',
-              username: 'postgres',
-              password: process.env.POSTGRES_PASSWORD
-            });
-            
-            // Test the PostgreSQL connection
-            const testResult = await pgClient`SELECT 1 as test`;
-            if (testResult && testResult.length > 0) {
-              console.log('✅ Direct PostgreSQL connection successful!');
-              console.log('🔄 Creating custom Supabase-compatible client...');
-              
-              // Create a custom client that routes through PostgreSQL
-              supabase = createCustomSupabaseClient(pgClient, supabaseKey);
-            }
-          } catch (pgError) {
-            console.error('❌ Direct PostgreSQL connection also failed:', pgError);
-            console.log('🚨 All database connection methods exhausted');
-          }
-        }
-      }
-    }, 2000); // Test after 2 seconds
+    // Test network connectivity if not using direct PostgreSQL
+    console.log('⚠️ Skipping automatic validation - will test connectivity manually');
+  } else {
+    console.log('⚠️ Skipping automatic validation - will test connectivity manually');
   }
-  
-  // Skip validation during initialization, we'll do it manually
-  console.log('⚠️ Skipping automatic validation - will test connectivity manually');
   
 } catch (error) {
   console.error('❌ Failed to initialize Supabase client:', {
@@ -365,7 +300,7 @@ try {
   process.exit(1);
 }
 
-// Manual connectivity test with more detailed diagnostics
+// STEP 4: Manual connectivity test with enhanced fallback
 console.log('🧪 Running manual connectivity test...');
 setTimeout(async () => {
   try {
@@ -376,42 +311,96 @@ setTimeout(async () => {
     const baseUrl = `${testUrl.protocol}//${testUrl.host}`;
     
     console.log(`🌐 Testing base URL: ${baseUrl}`);
-    const response = await fetch(baseUrl, {
-      method: 'HEAD',
-      timeout: 10000
-    });
     
-    console.log(`✅ Base URL accessible: ${response.status} ${response.statusText}`);
+    // Test with a simple HTTP request first
+    try {
+      const response = await fetch(baseUrl, {
+        method: 'HEAD',
+        timeout: 10000
+      });
+      console.log(`✅ Basic HTTP connectivity successful: ${response.status}`);
+    } catch (fetchError) {
+      console.log(`⚠️ Basic HTTP test failed: ${fetchError.message}`);
+      
+      // Try fallback URLs if available
+      if (process.env.NODE_ENV === 'production') {
+        const fallbackUrls = [
+          'https://supabasekong-g00sk4cwgwk0cwkc8kcgc8gk.bookzify.xyz',
+          process.env.SUPABASE_EXTERNAL_URL,
+          process.env.SUPABASE_INTERNAL_URL
+        ].filter(Boolean).filter(url => url !== supabaseUrl);
+        
+        for (const fallbackUrl of fallbackUrls) {
+          try {
+            console.log(`🔄 Trying fallback URL: ${fallbackUrl}`);
+            const fallbackResponse = await fetch(fallbackUrl, {
+              method: 'HEAD', 
+              timeout: 10000
+            });
+            
+            if (fallbackResponse.ok) {
+              console.log(`✅ Fallback URL works! Switching to: ${fallbackUrl}`);
+              supabaseUrl = fallbackUrl;
+              
+              // Recreate Supabase client with working URL
+              supabase = createClient(fallbackUrl, supabaseKey, {
+                auth: { persistSession: false }
+              });
+              break;
+            }
+          } catch (fallbackError) {
+            console.log(`❌ Fallback URL failed: ${fallbackError.message}`);
+          }
+        }
+      }
+    }
     
-    // Test 2: Supabase REST API endpoint
-    const restUrl = `${supabaseUrl}/rest/v1/`;
-    console.log(`🔗 Testing REST API: ${restUrl}`);
-    
-    const restResponse = await fetch(restUrl, {
-      method: 'GET',
-      headers: {
-        'apikey': supabaseKey,
-        'Authorization': `Bearer ${supabaseKey}`
-      },
-      timeout: 10000
-    });
-    
-    console.log(`✅ REST API accessible: ${restResponse.status} ${restResponse.statusText}`);
-    
-    // Test 3: Try a simple query
-    console.log(`💾 Testing database query...`);
+    // Test 2: Supabase API connectivity
+    console.log('🧪 Testing production Supabase connectivity...');
     const { data, error } = await supabase
       .from('books')
-      .select('id', { count: 'exact', head: true })
+      .select('count', { count: 'exact', head: true })
       .limit(1);
     
     if (error && error.code !== 'PGRST116') {
-      console.error('❌ Database query failed:', error);
+      console.error('❌ Production Supabase connectivity failed:', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code
+      });
+      
+      // If this is a network error, try external URL
+      if (error.message.includes('fetch failed') || error.message.includes('network')) {
+        console.log('🔄 Network error detected, trying external URL...');
+        
+        const externalUrl = 'https://supabasekong-g00sk4cwgwk0cwkc8kcgc8gk.bookzify.xyz';
+        if (supabaseUrl !== externalUrl) {
+          try {
+            const externalClient = createClient(externalUrl, supabaseKey, {
+              auth: { persistSession: false }
+            });
+            
+            const { data: testData, error: testError } = await externalClient
+              .from('books')
+              .select('count', { count: 'exact', head: true })
+              .limit(1);
+            
+            if (!testError || testError.code === 'PGRST116') {
+              console.log('✅ External URL works! Switching to external connection...');
+              supabase = externalClient;
+              supabaseUrl = externalUrl;
+            } else {
+              console.log('❌ External URL also failed');
+            }
+          } catch (externalError) {
+            console.log('❌ External URL test failed:', externalError.message);
+          }
+        }
+      }
     } else {
-      console.log('✅ Database query successful');
+      console.log('✅ Supabase connectivity test successful');
     }
-    
-    console.log('🚀 All connectivity tests completed - starting server...');
     
   } catch (testError) {
     console.error('❌ Connectivity test failed:', {
@@ -425,8 +414,61 @@ setTimeout(async () => {
     });
     
     console.log('⚠️ Starting server anyway - connectivity issues may affect functionality');
+    
+    // Final fallback attempt if we have PostgreSQL credentials
+    if (process.env.NODE_ENV === 'production' && process.env.POSTGRES_PASSWORD) {
+      console.log('🔄 Implementing production networking workaround...');
+      
+      try {
+        const postgres = await import('postgres');
+        const postgresHost = process.env.POSTGRES_HOST || 'supabase-db-g00sk4cwgwk0cwkc8kcgc8gk';
+        
+        const pgClient = postgres.default({
+          host: postgresHost,
+          port: 5432,
+          database: 'postgres',
+          username: 'postgres',
+          password: process.env.POSTGRES_PASSWORD,
+          connect_timeout: 5,
+          max: 5
+        });
+        
+        // Quick test
+        const testResult = await pgClient`SELECT 1 as test`;
+        if (testResult && testResult.length > 0) {
+          console.log('✅ PostgreSQL fallback connection successful!');
+          
+          // Replace with basic PostgreSQL client
+          supabase = {
+            from: (table) => ({
+              select: (columns = '*') => ({
+                single: async () => {
+                  try {
+                    const query = `SELECT ${columns} FROM ${table} LIMIT 1`;
+                    const result = await pgClient.unsafe(query);
+                    return { data: result[0] || null, error: null };
+                  } catch (error) {
+                    return { data: null, error: { message: error.message, code: 'PG_ERROR' } };
+                  }
+                }
+              })
+            }),
+            storage: {
+              from: () => ({
+                upload: () => ({ data: null, error: { message: 'Storage not available' } }),
+                getPublicUrl: () => ({ data: { publicUrl: '' } })
+              })
+            }
+          };
+          
+          console.log('🔄 Using PostgreSQL direct connection as fallback');
+        }
+      } catch (pgError) {
+        console.error('❌ PostgreSQL fallback also failed:', pgError);
+      }
+    }
   }
-}, 1000);
+}, 2000); // Test after 2 seconds
 
 // Support multiple book sources
 const BOOK_SOURCES = {
