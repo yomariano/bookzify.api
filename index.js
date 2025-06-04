@@ -1071,7 +1071,11 @@ app.get('/health', async (req, res) => {
   
   try {
     if (supabase) {
-      console.log('🩺 Health check: Testing database connectivity...');
+      // Only log database connectivity test in development or when there are errors
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('🩺 Health check: Testing database connectivity...');
+      }
+      
       const { data, error } = await supabase
         .from('books')
         .select('id')
@@ -1088,11 +1092,15 @@ app.get('/health', async (req, res) => {
         console.error('❌ Health check: Database connectivity failed:', databaseError);
       } else {
         databaseStatus = 'connected';
-        console.log('✅ Health check: Database connectivity successful');
+        // Only log success in development
+        if (process.env.NODE_ENV !== 'production') {
+          console.log('✅ Health check: Database connectivity successful');
+        }
       }
     } else {
       databaseStatus = 'not_initialized';
       databaseError = 'Supabase client not initialized';
+      console.error('❌ Health check: Supabase client not initialized');
     }
   } catch (healthError) {
     databaseStatus = 'error';
