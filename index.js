@@ -131,15 +131,27 @@ console.log('🔑 API Key Comparison:');
 console.log(`🔧 Backend using: ${process.env.SUPABASE_ANON_KEY ? 'SUPABASE_ANON_KEY' : 'SERVICE_SUPABASEANON_KEY'}`);
 console.log(`🔧 Backend key: ${anonKey ? anonKey.substring(0, 50) + '...' : 'not set'}`);
 
-// Debug: Compare with expected keys from Supabase environment
-const expectedAnonKey = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc0NzUxODI0MCwiZXhwIjo0OTAzMTkxODQwLCJyb2xlIjoiYW5vbiJ9.zS-orKiyJHsw_8XnPaaUHOEUvhiYSR-BX-UPQRNIRXQ";
-const expectedServiceKey = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc0NzUxODI0MCwiZXhwIjo0OTAzMTkxODQwLCJyb2xlIjoic2VydmljZV9yb2xlIn0.-Q1GLX4t6XshgYFIeYfCx5bgNsYVAhu-2CP5VC_RpjM";
-
-console.log(`🖥️ Expected anon key: ${expectedAnonKey.substring(0, 50)}...`);
-console.log(`🔍 Keys match: ${anonKey === expectedAnonKey ? '✅ YES' : '❌ NO'}`);
-
-if (anonKey !== expectedAnonKey) {
-  console.log('⚠️ Warning: API key mismatch detected. Using provided key but this may cause issues.');
+// Debug: Validate key format instead of comparing to hardcoded value
+if (anonKey) {
+  // Check if it's a valid JWT format
+  const keyParts = anonKey.split('.');
+  const isValidJWT = keyParts.length === 3;
+  
+  console.log(`🔍 Key format validation: ${isValidJWT ? '✅ Valid JWT format' : '❌ Invalid JWT format'}`);
+  
+  if (isValidJWT) {
+    try {
+      // Decode the JWT payload to check role
+      const payload = JSON.parse(atob(keyParts[1]));
+      const role = payload.role || 'unknown';
+      console.log(`🎭 JWT Role: ${role}`);
+      console.log(`✅ Using ${role} key for Supabase operations`);
+    } catch (decodeError) {
+      console.log('⚠️ Could not decode JWT payload, but proceeding with provided key');
+    }
+  }
+} else {
+  console.log('❌ No API key provided');
 }
 
 // Optional validation for PostgreSQL credentials (for direct DB access if needed later)
