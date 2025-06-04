@@ -521,6 +521,9 @@ const BOOK_SOURCES = {
 // Default source (keeping existing behavior)
 const DEFAULT_SOURCE = 'ebook-hunter';
 
+// Define download path globally
+const downloadPath = process.env.DOWNLOAD_PATH || '/tmp/downloads';
+
 // Helper function to get base URL for a source
 function getBaseUrl(source = DEFAULT_SOURCE) {
   return BOOK_SOURCES[source] || BOOK_SOURCES[DEFAULT_SOURCE];
