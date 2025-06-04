@@ -772,6 +772,10 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'dist')));
 
+// Explicit preflight handling for problematic endpoints
+app.options('/books/*', cors(corsOptions));
+app.options('/api/*', cors(corsOptions));
+
 // CORS debugging middleware
 app.use((req, res, next) => {
   const origin = req.get('Origin');
@@ -779,7 +783,7 @@ app.use((req, res, next) => {
   const method = req.method;
   const path = req.path;
   
-  // Only log if there's an actual Origin header (real CORS request) or if it's an OPTIONS request
+  // Log all requests that have Origin header or are OPTIONS requests
   if (origin || method === 'OPTIONS') {
     console.log(`🌐 CORS Request Debug:
     📍 Origin: ${origin || 'not set'}
@@ -787,6 +791,7 @@ app.use((req, res, next) => {
     🔧 Method: ${method}
     📁 Path: ${path}
     🌍 Environment: ${process.env.NODE_ENV || 'development'}
+    📋 All Request Headers: ${JSON.stringify(req.headers, null, 2)}
   `);
     
     if (origin) {
@@ -807,10 +812,74 @@ app.use((req, res, next) => {
       if (!isAllowed) {
         console.log(`📋 Allowed origins: ${JSON.stringify(allowedOrigins, null, 2)}`);
       }
+      
+      // Log what headers are being set by CORS middleware
+      console.log(`📤 Response headers being set:
+        Access-Control-Allow-Origin: ${res.get('Access-Control-Allow-Origin') || 'not set'}
+        Access-Control-Allow-Methods: ${res.get('Access-Control-Allow-Methods') || 'not set'}
+        Access-Control-Allow-Headers: ${res.get('Access-Control-Allow-Headers') || 'not set'}
+        Access-Control-Allow-Credentials: ${res.get('Access-Control-Allow-Credentials') || 'not set'}
+      `);
     }
   }
   
   next();
+});
+
+// Manual CORS header fallback - ensure headers are always set correctly
+app.use((req, res, next) => {
+  const origin = req.get('Origin');
+  
+  if (origin) {
+    // Check if origin is allowed
+    const allowedOrigins = process.env.NODE_ENV === 'production' 
+      ? (process.env.CORS_ALLOWED_ORIGINS 
+          ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(o => o.trim())
+          : ['https://bookzify.xyz', 'https://www.bookzify.xyz', 'https://api.bookzify.xyz'])
+      : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://localhost:4000', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001', 'http://127.0.0.1:5173', 'http://127.0.0.1:4000'];
+    
+    const isAllowed = allowedOrigins.includes(origin) || 
+      (process.env.NODE_ENV !== 'production' && (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')));
+    
+    if (isAllowed) {
+      // Set CORS headers manually as fallback
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Access-Control-Allow-Credentials', 'true');
+      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH');
+      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Access-Control-Allow-Origin, Access-Control-Allow-Methods, Access-Control-Allow-Headers');
+      res.header('Access-Control-Expose-Headers', 'Access-Control-Allow-Origin, Access-Control-Allow-Methods, Access-Control-Allow-Headers');
+      
+      console.log(`🔧 Manual CORS headers set for origin: ${origin}`);
+    }
+  }
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    console.log(`✈️ Handling OPTIONS preflight request for ${req.path}`);
+    return res.status(200).end();
+  }
+  
+  next();
+});
+
+// Simple CORS test endpoint
+app.get('/cors-test-simple', (req, res) => {
+  const origin = req.get('Origin');
+  console.log(`🧪 Simple CORS test - Origin: ${origin || 'not set'}`);
+  
+  res.json({
+    success: true,
+    message: 'CORS test successful',
+    origin: origin || 'not set',
+    timestamp: new Date().toISOString(),
+    headers_received: req.headers,
+    cors_headers_set: {
+      'Access-Control-Allow-Origin': res.get('Access-Control-Allow-Origin'),
+      'Access-Control-Allow-Credentials': res.get('Access-Control-Allow-Credentials'),
+      'Access-Control-Allow-Methods': res.get('Access-Control-Allow-Methods'),
+      'Access-Control-Allow-Headers': res.get('Access-Control-Allow-Headers')
+    }
+  });
 });
 
 // OpenRouter API proxy
